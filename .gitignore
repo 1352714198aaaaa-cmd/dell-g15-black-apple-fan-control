@@ -1,0 +1,6 @@
+*.o
+*.aml
+.DS_Store
+build/
+**/FanCtl.app/
+**/FanProbe.kext/

@@ -1,0 +1,64 @@
+#!/bin/bash
+# fanctl - Dell G15 风扇控制 (macOS, 依赖 FanProbe.kext)
+# 用法:
+#   fanctl mode balanced|perf|cool|quiet|g|auto
+#   fanctl duty <1|2> <0-100>
+#   fanctl status
+set -u
+LAST_RET=/Users/Shared/tahoe/fanctl.log
+log() { echo "$(date '+%H:%M:%S') $*" >> "$LAST_RET"; }
+
+case "${1:-}" in
+  mode)
+    case "${2:-}" in
+      balanced|0xa0|160) v=160 ;;
+      perf|performance|0xa1|161) v=161 ;;
+      cool|0xa2|162) v=162 ;;
+      quiet|0xa3|163) v=163 ;;
+      g|gmode|g-mode|0xab|171) v=171 ;;
+      auto|custom|0) v=0 ;;
+      *) echo "用法: fanctl mode balanced|perf|cool|quiet|g|auto"; exit 1 ;;
+    esac
+    out=$(sysctl -w kern.fanprobe.mode=$v 2>&1)
+    ret=$(sysctl -n kern.fanprobe.lastret)
+    log "mode=$v ret=$ret"
+    echo "$out"
+    [ "$ret" = "0" ] && echo "OK: mode=$v" || { echo "FAIL ret=$ret"; exit 2; }
+    ;;
+  duty)
+    fan="${2:-}"; val="${3:-}"
+    case "$fan" in
+      1|32|50|0x32) id=0x32 ;;
+      2|33|51|0x33) id=0x33 ;;
+      *) echo "用法: fanctl duty <1|2> <0-100>"; exit 1 ;;
+    esac
+    case "$val" in ''|*[!0-9]*) echo "占空比必须是 0-100 的数字"; exit 1 ;; esac
+    [ "$val" -gt 100 ] && { echo "占空比最大 100"; exit 1; }
+    enc=$(( (id << 8) | val ))
+    out=$(sysctl -w kern.fanprobe.duty=$enc 2>&1)
+    ret=$(sysctl -n kern.fanprobe.lastret)
+    log "duty fan=$id val=$val enc=$enc ret=$ret"
+    echo "$out"
+    [ "$ret" = "0" ] && echo "OK: fan$fan($id) duty=$val%" || { echo "FAIL ret=$ret"; exit 2; }
+    ;;
+  rpm)
+    sysctl -w kern.fanprobe.ecread=0x57 >/dev/null 2>&1; f1=$(sysctl -n kern.fanprobe.lastval)
+    sysctl -w kern.fanprobe.ecread=0x59 >/dev/null 2>&1; f2=$(sysctl -n kern.fanprobe.lastval)
+    echo "fan1 = ${f1} RPM"
+    echo "fan2 = ${f2} RPM"
+    ;;
+  status)
+    echo "fan1 = $(sysctl -w kern.fanprobe.ecread=0x57 >/dev/null 2>&1; sysctl -n kern.fanprobe.lastval) RPM"
+    echo "fan2 = $(sysctl -w kern.fanprobe.ecread=0x59 >/dev/null 2>&1; sysctl -n kern.fanprobe.lastval) RPM"
+    echo "lastmode = $(sysctl -n kern.fanprobe.lastmode)"
+    echo "lastret  = $(sysctl -n kern.fanprobe.lastret)"
+    echo "lastval  = $(sysctl -n kern.fanprobe.lastval)"
+    ;;
+  *)
+    echo "用法:"
+    echo "  fanctl mode balanced|perf|cool|quiet|g|auto"
+    echo "  fanctl duty <1|2> <0-100>"
+    echo "  fanctl rpm"
+    echo "  fanctl status"
+    ;;
+esac
