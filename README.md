@@ -1,5 +1,7 @@
 # G15 FanCtl — Dell G15 fan control for macOS
 
+**中文说明：[README.zh-CN.md](README.zh-CN.md)**
+
 Fan control for **Dell G15 (5511 / Comet Lake-H + RTX 3060 Laptop)** running macOS 26 (Tahoe),
 via the AWCC ACPI WMI interface exposed by the BIOS.
 
