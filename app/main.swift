@@ -16,11 +16,12 @@ func sysctlGet(_ name: String) -> Int32 {
     return v
 }
 func setModeValue(_ v: Int32) { sysctlSet("kern.fanprobe.mode", v) }
-
+func setDutyValue(fan: UInt32, duty: UInt32) {
+    sysctlSet("kern.fanprobe.duty", Int32((fan << 8) | (duty > 100 ? 100 : duty)))
+}
 func saveFanState(_ state: String) {
     try? state.write(toFile: "/Users/Shared/fanctl.state", atomically: true, encoding: .utf8)
 }
-func setDutyValue(fan: UInt32, duty: UInt32) { sysctlSet("kern.fanprobe.duty", Int32((fan << 8) | (duty > 100 ? 100 : duty))) }
 func readEC(_ reg: Int32) -> Int32 {
     var v = reg
     sysctlbyname("kern.fanprobe.ecread", nil, nil, &v, MemoryLayout<Int32>.size)
@@ -48,9 +49,7 @@ func gpuTemperature() -> Double {
         if let prop = IORegistryEntryCreateCFProperty(service, "PerformanceStatistics" as CFString, kCFAllocatorDefault, 0),
            let dict = prop.takeRetainedValue() as? [String: Any],
            let t = dict["Temperature(C)"] as? Int {
-            result = Double(t)
-            IOObjectRelease(service)
-            break
+            result = Double(t); IOObjectRelease(service); break
         }
         IOObjectRelease(service)
         service = IOIteratorNext(iterator)
@@ -59,12 +58,14 @@ func gpuTemperature() -> Double {
     return result
 }
 
-func fanbarTemps() -> (Double, Double) {
-    return (smcRead("TC0P"), smcRead("TH0x"))
-}
+// MARK: - 主题
 
-// MARK: - 模型
-
+let accentChoices: [(String, Color)] = [
+    ("blue", .blue), ("green", .green), ("orange", .orange),
+    ("pink", .pink), ("purple", .purple), ("red", .red),
+    ("graphite", Color(white: 0.5))
+]
+let appearanceChoices = [("system", "自动"), ("dark", "深色"), ("light", "浅色")]
 let curves: [String: [(Double, Double)]] = [
     "silent":      [(50, 20), (60, 30), (70, 45), (80, 60), (90, 85)],
     "balanced":    [(45, 20), (55, 30), (65, 45), (75, 65), (85, 85), (92, 100)],
@@ -76,36 +77,29 @@ func dutyForTemp(_ t: Double, preset: String) -> UInt32 {
     if t >= c[c.count-1].0 { return UInt32(c[c.count-1].1) }
     for i in 0..<(c.count - 1) {
         let (t0, d0) = c[i], (t1, d1) = c[i+1]
-        if t >= t0 && t <= t1 {
-            return UInt32(d0 + (d1 - d0) * ((t - t0) / (t1 - t0)))
-        }
+        if t >= t0 && t <= t1 { return UInt32(d0 + (d1 - d0) * ((t - t0) / (t1 - t0))) }
     }
     return 50
 }
 
-let accentChoices: [(String, Color)] = [
-    ("blue", .blue), ("green", .green), ("orange", .orange),
-    ("pink", .pink), ("purple", .purple), ("red", .red),
-    ("graphite", Color(white: 0.5))
-]
-let appearanceChoices = [("system", "跟随系统"), ("dark", "深色"), ("light", "浅色")]
+// MARK: - 模型
 
 final class FanModel: ObservableObject {
     @Published var cpu: Double = 0
     @Published var gpu: Double = 0
-    @Published var ssd: Double = 0
     @Published var fan1: Int = 0
     @Published var fan2: Int = 0
     @Published var duty: Int = 45
     @Published var curveOn: Bool = true
     @Published var preset: String = "balanced"
     @Published var lastMsg: String = ""
-    @Published var manualMode: String = ""
+    @Published var manualMode: String = "曲线 · 平衡"
     @Published var appearance: String = UserDefaults.standard.string(forKey: "fanctl.appearance") ?? "system"
     @Published var accentName: String = UserDefaults.standard.string(forKey: "fanctl.accent") ?? "blue"
+    @Published var cpuHistory: [Double] = []
+    @Published var gpuHistory: [Double] = []
 
     var accentColor: Color { accentChoices.first(where: { $0.0 == accentName })?.1 ?? .blue }
-
     private var timer: Timer?
     private var lastAppliedDuty: UInt32 = 0
 
@@ -113,34 +107,22 @@ final class FanModel: ObservableObject {
         applyAppearance()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
-    }
-
-    func setAppearance(_ v: String) {
-        appearance = v
-        UserDefaults.standard.set(v, forKey: "fanctl.appearance")
-        applyAppearance()
-    }
-
-    func applyAppearance() {
-        switch appearance {
-        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
-        case "light": NSApp.appearance = NSAppearance(named: .aqua)
-        default: NSApp.appearance = nil
-        }
-    }
-
-    func setAccent(_ v: String) {
-        accentName = v
-        UserDefaults.standard.set(v, forKey: "fanctl.accent")
+        RunLoop.current.add(timer!, forMode: .common)
     }
 
     func refresh() {
-        let t = fanbarTemps()
+        let t = (smcRead("TC0P"), 0.0)
+        let g = gpuTemperature()
         let f1 = readEC(0x57), f2 = readEC(0x59)
         DispatchQueue.main.async {
-            self.cpu = t.0
-            self.gpu = gpuTemperature()
+            self.cpu = t.0; self.gpu = g
             self.fan1 = Int(f1); self.fan2 = Int(f2)
+            if self.cpuHistory.isEmpty {
+                self.cpuHistory = Array(repeating: t.0, count: 150)
+                self.gpuHistory = Array(repeating: g, count: 150)
+            }
+            self.cpuHistory.append(t.0); if self.cpuHistory.count > 300 { self.cpuHistory.removeFirst() }
+            self.gpuHistory.append(g); if self.gpuHistory.count > 300 { self.gpuHistory.removeFirst() }
             if self.curveOn {
                 let d = dutyForTemp(t.0, preset: self.preset)
                 if d != self.lastAppliedDuty {
@@ -157,68 +139,90 @@ final class FanModel: ObservableObject {
     func presetName(_ key: String) -> String {
         switch key { case "silent": return "安静"; case "performance": return "性能"; default: return "平衡" }
     }
-
     func applyMode(_ name: String, _ v: Int32) {
-        setModeValue(v)
-        saveFanState("mode=\(v)")
-        curveOn = false
-        manualMode = name
+        setModeValue(v); saveFanState("mode=\(v)")
+        curveOn = false; manualMode = name
         lastMsg = "已切换：\(name)（返回码 \(sysctlGet("kern.fanprobe.lastret"))）"
     }
-
     func applyDuty(_ d: Int) {
         let v = min(max(d, 0), 100)
-        duty = v
-        curveOn = false
-        manualMode = "手动 \(v)%"
+        duty = v; curveOn = false; manualMode = "手动 \(v)%"
         setDutyValue(fan: 0x32, duty: UInt32(v))
         setDutyValue(fan: 0x33, duty: UInt32(v))
         saveFanState("duty=both:\(v)")
         lastMsg = "手动占空比 \(v)%"
     }
-
     func setCurve(_ on: Bool) {
         curveOn = on
         if on { saveFanState("mode=160"); lastAppliedDuty = 0; refresh() }
         else { setModeValue(160); saveFanState("mode=160"); manualMode = "自动" }
     }
-
     func setPreset(_ key: String) {
-        preset = key
-        curveOn = true
-        saveFanState("mode=160")
-        lastAppliedDuty = 0
-        lastMsg = "曲线预设：\(presetName(key))"
-        refresh()
+        preset = key; curveOn = true; saveFanState("mode=160")
+        lastAppliedDuty = 0; lastMsg = "曲线预设：\(presetName(key))"; refresh()
+    }
+    func setAppearance(_ v: String) {
+        appearance = v; UserDefaults.standard.set(v, forKey: "fanctl.appearance"); applyAppearance()
+    }
+    func applyAppearance() {
+        switch appearance {
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        default: NSApp.appearance = nil
+        }
+    }
+    func setAccent(_ v: String) {
+        accentName = v; UserDefaults.standard.set(v, forKey: "fanctl.accent")
     }
 }
 
-// MARK: - 界面
+// MARK: - 组件
 
-struct StatCard: View {
-    let icon: String
+struct SpeedBadge: View {
+    let rpm: Int
+    var body: some View {
+        let (text, color): (String, Color) = rpm < 2800 ? ("低速", .green) : (rpm < 4300 ? ("中速", .yellow) : ("高速", .orange))
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(text).font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct FanColumn: View {
     let title: String
-    let value: String
-    let unit: String
+    let rpm: Int
+    let maxRPM: Double
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 4) { Image(systemName: icon).font(.system(size: 11)); Text(title).font(.system(size: 11)) }
-                .foregroundStyle(.secondary)
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(value).font(.system(size: 26, weight: .semibold, design: .rounded))
-                Text(unit).font(.system(size: 11)).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Image(systemName: "fanblades").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text(title).font(.system(size: 12, weight: .medium))
+                Spacer()
+                SpeedBadge(rpm: rpm)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text("\(rpm)").font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
+                Text("RPM").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.10))
+                    Capsule().fill(Color.accentColor)
+                        .frame(width: geo.size.width * min(Double(rpm) / maxRPM, 1.0))
+                }
+            }.frame(height: 4)
+            HStack {
+                Text("\(Int(maxRPM)) 最大").font(.system(size: 10)).foregroundStyle(.tertiary)
+                Spacer()
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .controlBackgroundColor)))
     }
 }
 
-struct ModeButton: View {
+struct PillButton: View {
     let title: String
     let active: Bool
-    let accent: Color
     let action: () -> Void
     var body: some View {
         Button(action: action) {
@@ -226,101 +230,192 @@ struct ModeButton: View {
                 .font(.system(size: 12, weight: .medium))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 8).fill(active ? accent : Color(nsColor: .controlBackgroundColor)))
+                .background(RoundedRectangle(cornerRadius: 8).fill(active ? Color.accentColor : Color.white.opacity(0.08)))
                 .foregroundStyle(active ? .white : .primary)
-        }
-        .buttonStyle(.plain)
+        }.buttonStyle(.plain)
     }
 }
 
+struct TempChart: View {
+    let cpu: [Double]
+    let gpu: [Double]
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width, h = geo.size.height
+            ZStack {
+                ForEach([20.0, 40.0, 60.0, 80.0], id: \.self) { t in
+                    let y = h - CGFloat((t - 20) / 70) * h
+                    Path { p in p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: w, y: y)) }
+                        .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
+                    Text("\(Int(t))°").font(.system(size: 8)).foregroundStyle(.tertiary)
+                        .position(x: w - 14, y: y - 6)
+                }
+                line(cpu, color: .blue, w: w, h: h)
+                line(gpu, color: .purple, w: w, h: h)
+            }
+        }.frame(height: 120)
+    }
+    func line(_ data: [Double], color: Color, w: CGFloat, h: CGFloat) -> some View {
+        Path { p in
+            guard data.count > 1 else { return }
+            for (i, t) in data.enumerated() {
+                let x = w * CGFloat(i) / CGFloat(max(data.count - 1, 1))
+                let y = h - CGFloat(min(max((t - 20) / 70, 0), 1)) * h
+                if i == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
+            }
+        }.stroke(color, style: StrokeStyle(lineWidth: 2, lineJoin: .round))
+    }
+}
+
+// MARK: - 主界面
+
 struct ContentView: View {
     @ObservedObject var model: FanModel
-    let presets = [("silent", "安静"), ("balanced", "平衡"), ("performance", "性能")]
     let modes = [("自动", Int32(160)), ("性能", Int32(161)), ("冷静", Int32(162)), ("安静", Int32(163)), ("G-Mode", Int32(171))]
+    let presets = [("silent", "安静"), ("balanced", "平衡"), ("performance", "性能")]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
+            // header
             HStack(spacing: 10) {
-                Image(systemName: "fanblades.fill").font(.system(size: 22)).foregroundStyle(.tint)
+                Image(systemName: "fanblades.fill")
+                    .font(.system(size: 20))
+                    .frame(width: 38, height: 38)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)))
+                    .foregroundStyle(.white)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("FanCtl").font(.system(size: 18, weight: .bold))
-                    Text("Dell G15 · macOS 26").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("FanCtl").font(.system(size: 15, weight: .semibold))
+                    HStack(spacing: 4) {
+                        Circle().fill(.green).frame(width: 5, height: 5)
+                        Text("风扇正常 · Dell G15 · macOS 26").font(.system(size: 10.5)).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
-                Text(model.manualMode).font(.system(size: 11, weight: .medium))
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                Text(model.manualMode).font(.system(size: 10.5, weight: .medium))
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.18)))
+                    .foregroundStyle(Color.accentColor)
             }
 
-            VStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    StatCard(icon: "thermometer.medium", title: "CPU 温度", value: String(format: "%.0f", model.cpu), unit: "°C")
-                    StatCard(icon: "cpu", title: "GPU 温度", value: String(format: "%.0f", model.gpu), unit: "°C")
-                }
-                HStack(spacing: 10) {
-                    StatCard(icon: "fanblades", title: "风扇 1", value: "\(model.fan1)", unit: "RPM")
-                    StatCard(icon: "fanblades", title: "风扇 2", value: "\(model.fan2)", unit: "RPM")
-                }
+            // fans
+            HStack(alignment: .top, spacing: 22) {
+                FanColumn(title: "风扇 1", rpm: model.fan1, maxRPM: 5200)
+                FanColumn(title: "风扇 2", rpm: model.fan2, maxRPM: 5200)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("模式").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-                HStack(spacing: 8) {
-                    ForEach(modes, id: \.0) { m in
-                        ModeButton(title: m.0, active: false, accent: model.accentColor) { model.applyMode(m.0, m.1) }
-                    }
+            // mode bar
+            HStack(spacing: 6) {
+                ForEach(modes, id: \.0) { m in
+                    PillButton(title: m.0, active: !model.curveOn && model.manualMode == m.0) { model.applyMode(m.0, m.1) }
                 }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
+            // manual duty
+            VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text("手动占空比").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                    Text("手动占空比").font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer()
-                    Text("\(model.duty)%").font(.system(size: 12, weight: .medium))
+                    Text("\(model.duty)%").font(.system(size: 11, weight: .medium))
                 }
-                Slider(value: Binding(get: { Double(model.duty) }, set: { model.applyDuty(Int($0)) }), in: 0...100, step: 5)
-                    .tint(.accentColor)
+                Slider(value: Binding(get: { Double(model.duty) },
+                                      set: { model.applyDuty(Int($0)) }), in: 0...100, step: 5)
+                    .controlSize(.small)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
+            // target line
+            HStack {
+                Text(model.curveOn ? "曲线：跟随 CPU 温度" : "手动占空比")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer()
+                Text(model.curveOn ? "目标 \(model.duty)%" : "\(model.duty)%")
+                    .font(.system(size: 11, weight: .medium))
+            }
+
+            Divider().opacity(0.15)
+
+            // temps
+            HStack(alignment: .top, spacing: 20) {
+                tempBlock("CPU", model.cpu, .blue)
+                tempBlock("GPU", model.gpu, .purple)
+            }
+
+            // chart
+            VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("风扇曲线").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                    Text("温度").font(.system(size: 12, weight: .semibold))
                     Spacer()
-                    Toggle("", isOn: Binding(get: { model.curveOn }, set: { model.setCurve($0) })).toggleStyle(.switch).labelsHidden()
+                    Text("最近 10 分钟").font(.system(size: 10)).foregroundStyle(.tertiary)
                 }
-                HStack(spacing: 8) {
-                    ForEach(presets, id: \.0) { p in
-                        ModeButton(title: p.1, active: model.curveOn && model.preset == p.0, accent: model.accentColor) { model.setPreset(p.0) }
-                    }
-                }
-                Text("曲线：45°C→20% · 55→30 · 65→45 · 75→65 · 85→85 · 92→100（平衡）")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("外观").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-                HStack(spacing: 8) {
-                    ForEach(appearanceChoices, id: \.0) { a in
-                        ModeButton(title: a.1, active: model.appearance == a.0, accent: model.accentColor) { model.setAppearance(a.0) }
-                    }
-                }
-                HStack(spacing: 10) {
-                    ForEach(accentChoices, id: \.0) { c in
-                        Circle().fill(c.1).frame(width: 18, height: 18)
-                            .overlay(Circle().stroke(Color.primary.opacity(model.accentName == c.0 ? 0.9 : 0), lineWidth: 2))
-                            .onTapGesture { model.setAccent(c.0) }
-                    }
+                TempChart(cpu: model.cpuHistory, gpu: model.gpuHistory)
+                HStack(spacing: 12) {
+                    legend("CPU", .blue); legend("GPU", .purple)
+                    Spacer()
                 }
             }
 
-            if !model.lastMsg.isEmpty {
-                Text(model.lastMsg).font(.system(size: 10)).foregroundStyle(.secondary)
+            // curve presets
+            HStack(spacing: 8) {
+                ForEach(presets, id: \.0) { p in
+                    PillButton(title: p.1, active: model.curveOn && model.preset == p.0) { model.setPreset(p.0) }
+                }
             }
+
+            // appearance (compact)
+            HStack(spacing: 8) {
+                ForEach(appearanceChoices, id: \.0) { a in
+                    PillButton(title: a.1, active: model.appearance == a.0) { model.setAppearance(a.0) }
+                }
+                Spacer()
+                ForEach(accentChoices.prefix(5), id: \.0) { c in
+                    Circle().fill(c.1).frame(width: 14, height: 14)
+                        .overlay(Circle().stroke(Color.primary.opacity(model.accentName == c.0 ? 0.9 : 0), lineWidth: 1.5))
+                        .onTapGesture { model.setAccent(c.0) }
+                }
+            }
+
             Spacer(minLength: 0)
+
+            // footer
+            HStack {
+                Button("活动监视器") {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"))
+                }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer()
+                Button("退出") { NSApp.terminate(nil) }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
         }
-        .padding(20)
+        .padding(18)
+        .padding(.top, 10)
+        .frame(width: 460, height: 760)
         .tint(model.accentColor)
-        .frame(width: 480, height: 620)
+    }
+
+    func tempBlock(_ name: String, _ value: Double, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Circle().fill(color).frame(width: 6, height: 6)
+                Text(name).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text(String(format: "%.0f", value)).font(.system(size: 30, weight: .semibold, design: .rounded)).monospacedDigit()
+                Text("°C").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.10))
+                    Capsule().fill(color).frame(width: geo.size.width * min(value / 100, 1))
+                }
+            }.frame(height: 4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    func legend(_ name: String, _ color: Color) -> some View {
+        HStack(spacing: 4) {
+            Capsule().fill(color).frame(width: 10, height: 2)
+            Text(name).font(.system(size: 9)).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -344,8 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rpmItem.state = UserDefaults.standard.bool(forKey: "fanctl.menuRPM") ? .on : .off
         menu.addItem(rpmItem)
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "退出 FanCtl", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        menu.addItem(quit)
+        menu.addItem(NSMenuItem(title: "退出 FanCtl", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
 
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.updateTitle() }
@@ -372,13 +466,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showWindow() {
         if window == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 620),
-                             styleMask: [.titled, .closable, .miniaturizable],
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 760),
+                             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                              backing: .buffered, defer: false)
             w.title = "FanCtl 风扇控制"
-            w.contentView = NSHostingView(rootView: ContentView(model: model))
-            w.isReleasedWhenClosed = false
-            w.center()
+            w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
+            w.isOpaque = false
+            w.backgroundColor = .clear
+            w.isMovableByWindowBackground = true
+
+            let effect = NSVisualEffectView()
+            effect.material = .underWindowBackground
+            effect.blendingMode = .behindWindow
+            effect.state = .active
+            effect.isEmphasized = true
+
+            let tint = NSView(frame: effect.bounds)
+            tint.wantsLayer = true
+            tint.autoresizingMask = [.width, .height]
+            tint.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.7).cgColor
+            effect.addSubview(tint)
+
+            let hosting = NSHostingView(rootView: ContentView(model: model))
+            hosting.translatesAutoresizingMaskIntoConstraints = false
+            hosting.wantsLayer = true
+            hosting.layer?.backgroundColor = NSColor.clear.cgColor
+            effect.addSubview(hosting)
+            NSLayoutConstraint.activate([
+                hosting.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
+                hosting.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
+                hosting.topAnchor.constraint(equalTo: effect.topAnchor),
+                hosting.bottomAnchor.constraint(equalTo: effect.bottomAnchor)
+            ])
+            w.contentView = effect
             window = w
         }
         window.makeKeyAndOrderFront(nil)
