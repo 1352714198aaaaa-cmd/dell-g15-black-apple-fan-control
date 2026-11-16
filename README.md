@@ -17,6 +17,10 @@ via the AWCC ACPI WMI interface exposed by the BIOS.
 - Fan RPM readout (EC `0x57` / `0x59`)
 - GPU temperature (`IOAccelerator` → `PerformanceStatistics`)
 - Fan curve presets (silent / balanced / performance)
+- `fanctl diag` diagnostics
+- Restores the last mode/duty at boot
+- Menu bar option to show fan RPM
+- App icon
 - SwiftUI control panel + menu bar app, login item
 - Appearance themes: follow system / dark / light + accent colors
 - CLI: `fanctl mode|duty|rpm|status`

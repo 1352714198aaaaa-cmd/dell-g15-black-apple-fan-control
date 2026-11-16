@@ -15,6 +15,10 @@
 - 风扇转速读取（EC `0x57` / `0x59`）
 - GPU 温度（`IOAccelerator` → `PerformanceStatistics`）
 - 风扇曲线预设（安静 / 平衡 / 性能）
+- `fanctl diag` 一键自检
+- 开机恢复上次模式/占空比
+- 菜单栏可选显示转速
+- App 图标
 - SwiftUI 控制面板 + 菜单栏 App，登录自启
 - 外观主题：跟随系统 / 深色 / 浅色 + 强调色
 - 命令行：`fanctl mode|duty|rpm|status`

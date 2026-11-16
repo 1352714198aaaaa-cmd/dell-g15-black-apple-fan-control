@@ -3,10 +3,51 @@
 # 用法:
 #   fanctl mode balanced|perf|cool|quiet|g|auto
 #   fanctl duty <1|2> <0-100>
+#   fanctl rpm
 #   fanctl status
+#   fanctl diag
+#   fanctl restore
 set -u
-LAST_RET=/Users/Shared/tahoe/fanctl.log
-log() { echo "$(date '+%H:%M:%S') $*" >> "$LAST_RET"; }
+STATE="/Users/Shared/fanctl.state"
+LOG="/Users/Shared/fanctl.log"
+
+log() { echo "$(date '+%H:%M:%S') $*" >> "$LOG" 2>/dev/null; }
+
+save_state() { echo "$1" > "$STATE" 2>/dev/null; }
+
+# 写 sysctl 并检查返回码；失败则回退到自动
+apply_mode() {
+    local v=$1
+    local out ret
+    out=$(sysctl -w kern.fanprobe.mode=$v 2>&1)
+    ret=$(sysctl -n kern.fanprobe.lastret 2>/dev/null || echo -1)
+    if [ "$ret" != "0" ]; then
+        log "mode=$v FAILED ret=$ret, falling back to auto"
+        sysctl -w kern.fanprobe.mode=160 >/dev/null 2>&1
+        echo "FAIL: mode=$v (ret=$ret), 已回退自动" >&2
+        return 2
+    fi
+    echo "$out"
+    echo "OK: mode=$v"
+    return 0
+}
+
+apply_duty() {
+    local fan=$1 val=$2 enc
+    enc=$(( (fan << 8) | val ))
+    local out ret
+    out=$(sysctl -w kern.fanprobe.duty=$enc 2>&1)
+    ret=$(sysctl -n kern.fanprobe.lastret 2>/dev/null || echo -1)
+    if [ "$ret" != "0" ]; then
+        log "duty=$enc FAILED ret=$ret, falling back to auto"
+        sysctl -w kern.fanprobe.mode=160 >/dev/null 2>&1
+        echo "FAIL: duty=$enc (ret=$ret), 已回退自动" >&2
+        return 2
+    fi
+    echo "$out"
+    echo "OK: fan$fan duty=$val%"
+    return 0
+}
 
 case "${1:-}" in
   mode)
@@ -19,11 +60,7 @@ case "${1:-}" in
       auto|custom|0) v=0 ;;
       *) echo "用法: fanctl mode balanced|perf|cool|quiet|g|auto"; exit 1 ;;
     esac
-    out=$(sysctl -w kern.fanprobe.mode=$v 2>&1)
-    ret=$(sysctl -n kern.fanprobe.lastret)
-    log "mode=$v ret=$ret"
-    echo "$out"
-    [ "$ret" = "0" ] && echo "OK: mode=$v" || { echo "FAIL ret=$ret"; exit 2; }
+    apply_mode "$v" && { save_state "mode=$v"; log "mode=$v"; }
     ;;
   duty)
     fan="${2:-}"; val="${3:-}"
@@ -34,12 +71,7 @@ case "${1:-}" in
     esac
     case "$val" in ''|*[!0-9]*) echo "占空比必须是 0-100 的数字"; exit 1 ;; esac
     [ "$val" -gt 100 ] && { echo "占空比最大 100"; exit 1; }
-    enc=$(( (id << 8) | val ))
-    out=$(sysctl -w kern.fanprobe.duty=$enc 2>&1)
-    ret=$(sysctl -n kern.fanprobe.lastret)
-    log "duty fan=$id val=$val enc=$enc ret=$ret"
-    echo "$out"
-    [ "$ret" = "0" ] && echo "OK: fan$fan($id) duty=$val%" || { echo "FAIL ret=$ret"; exit 2; }
+    apply_duty "$id" "$val" && { save_state "duty=$id:$val"; log "duty=$id:$val"; }
     ;;
   rpm)
     sysctl -w kern.fanprobe.ecread=0x57 >/dev/null 2>&1; f1=$(sysctl -n kern.fanprobe.lastval)
@@ -48,11 +80,44 @@ case "${1:-}" in
     echo "fan2 = ${f2} RPM"
     ;;
   status)
-    echo "fan1 = $(sysctl -w kern.fanprobe.ecread=0x57 >/dev/null 2>&1; sysctl -n kern.fanprobe.lastval) RPM"
-    echo "fan2 = $(sysctl -w kern.fanprobe.ecread=0x59 >/dev/null 2>&1; sysctl -n kern.fanprobe.lastval) RPM"
-    echo "lastmode = $(sysctl -n kern.fanprobe.lastmode)"
-    echo "lastret  = $(sysctl -n kern.fanprobe.lastret)"
-    echo "lastval  = $(sysctl -n kern.fanprobe.lastval)"
+    echo "lastmode = $(sysctl -n kern.fanprobe.lastmode 2>/dev/null)"
+    echo "lastret  = $(sysctl -n kern.fanprobe.lastret 2>/dev/null)"
+    echo "lastval  = $(sysctl -n kern.fanprobe.lastval 2>/dev/null)"
+    echo "state    = $(cat "$STATE" 2>/dev/null || echo none)"
+    ;;
+  diag)
+    echo "== kext"
+    if kmutil showloaded 2>/dev/null | grep -q fanprobe; then
+        kmutil showloaded 2>/dev/null | grep -i fanprobe | sed 's/^/  /'
+    else
+        echo "  FanProbe.kext NOT loaded"
+    fi
+    echo "== sysctl"
+    for k in mode duty ecread lastret lastval lastmode; do
+        v=$(sysctl -n kern.fanprobe.$k 2>/dev/null)
+        if [ -n "$v" ]; then echo "  kern.fanprobe.$k = $v"; else echo "  kern.fanprobe.$k missing"; fi
+    done
+    echo "== EC"
+    sysctl -w kern.fanprobe.ecread=0x57 >/dev/null 2>&1
+    echo "  fan1 (0x57) = $(sysctl -n kern.fanprobe.lastval) rpm (ret=$(sysctl -n kern.fanprobe.lastret))"
+    sysctl -w kern.fanprobe.ecread=0x59 >/dev/null 2>&1
+    echo "  fan2 (0x59) = $(sysctl -n kern.fanprobe.lastval) rpm (ret=$(sysctl -n kern.fanprobe.lastret))"
+    echo "== state"
+    echo "  $(cat "$STATE" 2>/dev/null || echo none)"
+    ;;
+  restore)
+    s=$(cat "$STATE" 2>/dev/null || true)
+    case "$s" in
+      mode=*) v=${s#mode=}; apply_mode "$v" >/dev/null && echo "restored mode=$v" ;;
+      duty=*) d=${s#duty=}; id=${d%%:*}; val=${d##*:}
+              if [ "$id" = "both" ]; then
+                  apply_duty 0x32 "$val" >/dev/null; apply_duty 0x33 "$val" >/dev/null
+                  echo "restored duty=both:$val"
+              else
+                  apply_duty "$id" "$val" >/dev/null && echo "restored duty=$id:$val"
+              fi ;;
+      *) echo "no state to restore" ;;
+    esac
     ;;
   *)
     echo "用法:"
@@ -60,5 +125,7 @@ case "${1:-}" in
     echo "  fanctl duty <1|2> <0-100>"
     echo "  fanctl rpm"
     echo "  fanctl status"
+    echo "  fanctl diag"
+    echo "  fanctl restore"
     ;;
 esac

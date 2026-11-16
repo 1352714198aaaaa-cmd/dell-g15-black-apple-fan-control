@@ -16,6 +16,10 @@ func sysctlGet(_ name: String) -> Int32 {
     return v
 }
 func setModeValue(_ v: Int32) { sysctlSet("kern.fanprobe.mode", v) }
+
+func saveFanState(_ state: String) {
+    try? state.write(toFile: "/Users/Shared/fanctl.state", atomically: true, encoding: .utf8)
+}
 func setDutyValue(fan: UInt32, duty: UInt32) { sysctlSet("kern.fanprobe.duty", Int32((fan << 8) | (duty > 100 ? 100 : duty))) }
 func readEC(_ reg: Int32) -> Int32 {
     var v = reg
@@ -156,6 +160,7 @@ final class FanModel: ObservableObject {
 
     func applyMode(_ name: String, _ v: Int32) {
         setModeValue(v)
+        saveFanState("mode=\(v)")
         curveOn = false
         manualMode = name
         lastMsg = "已切换：\(name)（返回码 \(sysctlGet("kern.fanprobe.lastret"))）"
@@ -168,17 +173,20 @@ final class FanModel: ObservableObject {
         manualMode = "手动 \(v)%"
         setDutyValue(fan: 0x32, duty: UInt32(v))
         setDutyValue(fan: 0x33, duty: UInt32(v))
+        saveFanState("duty=both:\(v)")
         lastMsg = "手动占空比 \(v)%"
     }
 
     func setCurve(_ on: Bool) {
         curveOn = on
-        if on { lastAppliedDuty = 0; refresh() } else { setModeValue(160); manualMode = "自动" }
+        if on { saveFanState("mode=160"); lastAppliedDuty = 0; refresh() }
+        else { setModeValue(160); saveFanState("mode=160"); manualMode = "自动" }
     }
 
     func setPreset(_ key: String) {
         preset = key
         curveOn = true
+        saveFanState("mode=160")
         lastAppliedDuty = 0
         lastMsg = "曲线预设：\(presetName(key))"
         refresh()
@@ -331,6 +339,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let openItem = NSMenuItem(title: "打开控制面板…", action: #selector(showWindow), keyEquivalent: "o")
         openItem.target = self
         menu.addItem(openItem)
+        let rpmItem = NSMenuItem(title: "菜单栏显示转速", action: #selector(toggleMenuRPM), keyEquivalent: "")
+        rpmItem.target = self
+        rpmItem.state = UserDefaults.standard.bool(forKey: "fanctl.menuRPM") ? .on : .off
+        menu.addItem(rpmItem)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "退出 FanCtl", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
@@ -342,8 +354,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showWindow()
     }
 
+    @objc func toggleMenuRPM(_ sender: NSMenuItem) {
+        let on = !UserDefaults.standard.bool(forKey: "fanctl.menuRPM")
+        UserDefaults.standard.set(on, forKey: "fanctl.menuRPM")
+        sender.state = on ? .on : .off
+        updateTitle()
+    }
+
     func updateTitle() {
-        statusItem.button?.title = String(format: "🌡 %.0f°C", model.cpu)
+        if UserDefaults.standard.bool(forKey: "fanctl.menuRPM") {
+            let f1 = readEC(0x57), f2 = readEC(0x59)
+            statusItem.button?.title = String(format: "🌡 %.0f°C  %d/%d", model.cpu, f1, f2)
+        } else {
+            statusItem.button?.title = String(format: "🌡 %.0f°C", model.cpu)
+        }
     }
 
     @objc func showWindow() {
