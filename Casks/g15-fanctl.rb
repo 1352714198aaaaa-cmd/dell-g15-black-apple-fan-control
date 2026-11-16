@@ -13,11 +13,11 @@ cask "g15-fanctl" do
   homepage "https://github.com/1352714198aaaaa-cmd/dell-g15-black-apple-fan-control"
 
   livecheck do
-    url "https://github.com/1352714198aaaaa-cmd/dell-g15-black-apple-fan-control/releases/latest"
+    url :url
     strategy :github_latest
   end
 
-  depends_on macos: ">= :tahoe"
+  depends_on macos: :tahoe
   depends_on arch: :x86_64
 
   app "FanCtl.app"
