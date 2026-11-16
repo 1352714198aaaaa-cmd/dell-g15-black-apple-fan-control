@@ -5,6 +5,8 @@
 Fan control for **Dell G15 (5511 / Comet Lake-H + RTX 3060 Laptop)** running macOS 26 (Tahoe),
 via the AWCC ACPI WMI interface exposed by the BIOS.
 
+![FanCtl](docs/screenshot.png)
+
 > ⚠️ **Tested only on a Dell G15 5511.** Other models may differ. Writing EC registers is
 > potentially risky — use at your own risk. Not affiliated with Dell or Apple.
 

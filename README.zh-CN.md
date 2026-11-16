@@ -3,6 +3,8 @@
 在 **Dell G15（5511 / i7-11800H + RTX 3060 Laptop）** 上运行 macOS 26（Tahoe），
 通过 BIOS 暴露的 AWCC ACPI WMI 接口控制风扇。
 
+![FanCtl](docs/screenshot.png)
+
 > ⚠️ **仅在 Dell G15 5511 上实测。** 其他机型可能不同。写 EC 寄存器有风险，使用后果自负。
 > 与 Dell、Apple 无关。
 
