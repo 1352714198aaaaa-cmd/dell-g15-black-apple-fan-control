@@ -4,8 +4,9 @@ This is the release procedure for FanCtl. The asset naming is part of the
 contract with the Homebrew Cask: every release must upload
 `FanCtl-v<version>.zip`, and the Cask URL is built from that name.
 
-Current state: **v2.1.0** is published and `Casks/g15-fanctl.rb` points at its
-asset. Use this checklist as the template for the next version.
+Current state: **v2.1.1** is the current release candidate; **v2.1.0** is the
+previous published binary. Update `Casks/g15-fanctl.rb` only after the v2.1.1
+asset exists. Use this checklist as the template for the next version.
 
 ## 1. Preconditions
 
@@ -24,8 +25,8 @@ asset. Use this checklist as the template for the next version.
 ./ssdt/build.sh
 ./app/build.sh
 
-# Creates dist/FanCtl-v2.1.0.zip and dist/FanCtl-v2.1.0.zip.sha256
-./scripts/package-release.sh 2.1.0
+# Creates dist/FanCtl-v2.1.1.zip and dist/FanCtl-v2.1.1.zip.sha256
+./scripts/package-release.sh 2.1.1
 ```
 
 The packaging script refuses to run if the built app version does not match the
@@ -34,8 +35,8 @@ version argument, and fails if any of the four artifacts are missing.
 ## 3. Smoke test
 
 ```bash
-unzip -l dist/FanCtl-v2.1.0.zip
-shasum -a 256 -c dist/FanCtl-v2.1.0.zip.sha256
+unzip -l dist/FanCtl-v2.1.1.zip
+shasum -a 256 -c dist/FanCtl-v2.1.1.zip.sha256
 
 open app/FanCtl.app
 ```
@@ -52,25 +53,25 @@ Check:
 ## 4. Tag and publish
 
 ```bash
-git tag -a v2.1.0 -m "FanCtl v2.1.0"
-git push origin v2.1.0
+git tag -a v2.1.1 -m "FanCtl v2.1.1"
+git push origin v2.1.1
 ```
 
 The `release.yml` workflow builds on `macos-15-intel` and creates a GitHub
 Release with:
 
-- `FanCtl-v2.1.0.zip`
-- `FanCtl-v2.1.0.zip.sha256`
+- `FanCtl-v2.1.1.zip`
+- `FanCtl-v2.1.1.zip.sha256`
 
 It uses the workflow's `GITHUB_TOKEN` with `contents: write`. If the workflow is
 not available, create the release manually:
 
 ```bash
-gh release create v2.1.0 \
-  dist/FanCtl-v2.1.0.zip \
-  dist/FanCtl-v2.1.0.zip.sha256 \
-  --title "FanCtl v2.1.0" \
-  --notes-file docs/RELEASE-NOTES-v2.1.0.md
+gh release create v2.1.1 \
+  dist/FanCtl-v2.1.1.zip \
+  dist/FanCtl-v2.1.1.zip.sha256 \
+  --title "FanCtl v2.1.1" \
+  --notes-file docs/RELEASE-NOTES-v2.1.1.md
 ```
 
 Or use the GitHub web UI and upload both files.
@@ -80,7 +81,7 @@ Or use the GitHub web UI and upload both files.
 Only after the release asset exists:
 
 ```bash
-./scripts/bump-cask.sh 2.1.0
+./scripts/bump-cask.sh 2.1.1
 git diff -- Casks/g15-fanctl.rb
 ```
 
@@ -89,7 +90,7 @@ The script downloads the published asset, computes its SHA-256, updates
 
 ```bash
 git add Casks/g15-fanctl.rb
-git commit -m "chore(cask): update to 2.1.0"
+git commit -m "chore(cask): update to 2.1.1"
 git push origin main
 ```
 
@@ -102,7 +103,7 @@ brew install --cask ./Casks/g15-fanctl.rb
 
 ## 6. Post-release verification
 
-- `https://github.com/1352714198aaaaa-cmd/dell-g15-black-apple-fan-control/releases/download/v2.1.0/FanCtl-v2.1.0.zip` returns 200.
+- `https://github.com/1352714198aaaaa-cmd/dell-g15-black-apple-fan-control/releases/download/v2.1.1/FanCtl-v2.1.1.zip` returns 200.
 - The Cask SHA-256 matches the downloaded asset.
 - `brew install --cask g15-fanctl` succeeds and installs `FanCtl.app` + `fanctl`.
 - The Cask caveats point at the staged `FanProbe.kext` and `SSDT-FANEC.aml`.
@@ -113,9 +114,9 @@ brew install --cask ./Casks/g15-fanctl.rb
 If the asset is wrong before anyone installs it:
 
 ```bash
-gh release delete v2.1.0 --yes
-git push origin :refs/tags/v2.1.0
-git tag -d v2.1.0
+gh release delete v2.1.1 --yes
+git push origin :refs/tags/v2.1.1
+git tag -d v2.1.1
 ```
 
 If the Cask was already bumped, revert the Cask commit or run

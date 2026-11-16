@@ -811,9 +811,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.target = NSApp
         menu.addItem(quitItem)
 
-        statusItem.button?.target = self
-        statusItem.button?.action = #selector(statusItemClicked)
-        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self = self, let button = self.statusItem.button, event.window == button.window else {
+                return event
+            }
+            if event.type == .rightMouseDown {
+                self.showStatusMenu()
+            } else {
+                self.togglePopover()
+            }
+            return nil
+        }
 
         makePopover()
 
@@ -823,14 +831,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showWindow()
     }
 
-    @objc func statusItemClicked(_ sender: Any?) {
-        if let event = NSApp.currentEvent, event.type == .rightMouseUp {
-            statusItem.menu = menu
-            statusItem.button?.performClick(nil)
-            statusItem.menu = nil
-        } else {
-            togglePopover()
-        }
+    func showStatusMenu() {
+        NSApp.activate(ignoringOtherApps: true)
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        statusItem.menu = nil
     }
 
     func makePopover() {
