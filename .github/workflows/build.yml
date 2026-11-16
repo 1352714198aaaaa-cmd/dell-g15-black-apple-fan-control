@@ -11,6 +11,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install iasl
         run: brew install acpica
+      - name: Check Cask and launchd syntax
+        run: |
+          ruby -c Casks/g15-fanctl.rb
+          plutil -lint docs/examples/*.plist
       - name: Build kext
         run: ./kext/build.sh
       - name: Build SSDT

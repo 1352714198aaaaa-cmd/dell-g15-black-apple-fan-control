@@ -24,6 +24,11 @@
 - 外观主题：跟随系统 / 深色 / 浅色 + 强调色
 - 命令行：`fanctl mode|duty|rpm|status`
 
+## 文档
+
+- [架构说明](docs/ARCHITECTURE.md)：分层、ACPI/kext 接口、sysctl ABI、数据流、构建与发布流程。
+- [EC 寄存器表](docs/EC-REGISTERS.md)：寄存器地址、实测值，以及验证这些结论的实验。
+
 ## 原理
 
 BIOS 在 ACPI 里暴露了一个 `AMWW` 设备（`_UID = "AWCC"`），带有 WMI 调度方法 `WMAX`：
@@ -37,13 +42,34 @@ WMAX(0, 0x25, {2, 0, 0})           → AX28 → 读 EC 0x50
 热模式值：`0xA0` 平衡、`0xA1` 性能、`0xA2` 冷静、`0xA3` 安静、
 `0xAB` G-Mode（双风扇 100%）、`0` 自定义。
 
-风扇转速：EC `0x57`（风扇 1）、`0x59`（风扇 2）。
+风扇转速：EC `0x57`（风扇 1）、`0x59`（风扇 2）。在实测固件上，这两个地址返回 16 位 RPM
+值，也是唯一能通过 `RDEC` 可靠读回的与控制相关的寄存器；占空比/模式寄存器是只写路径。
+证据和完整寄存器表见 [EC-REGISTERS.md](docs/EC-REGISTERS.md)。
 
 kext（`FanProbe`）通过 `IOACPIPlatformDevice::evaluateObject` 调用 `\_SB.AMWW.WMAX`，
 并暴露 `kern.fanprobe.*` 系列 sysctl。另外用 `SSDT-FANEC` 增加了一个 `DSHF.RDEC` 方法，
 让 kext 能读取任意 EC 寄存器。
 
 ## 安装
+
+### Homebrew（App + 命令行）
+
+Cask 会安装 `FanCtl.app` 和 `fanctl` 命令行，但**不会**把 kext/SSDT 装进 EFI 分区；
+这两项仍需按下面的手动步骤处理。
+
+```bash
+# 在仓库目录中直接安装
+brew install --cask ./Casks/g15-fanctl.rb
+
+# 或者添加 tap 后按名字安装
+brew tap 1352714198aaaaa-cmd/dell-g15-black-apple-fan-control https://github.com/1352714198aaaaa-cmd/dell-g15-black-apple-fan-control
+brew install --cask g15-fanctl
+```
+
+App 未签名、未公证；Cask 的提示会说明 Gatekeeper 的处理方式，以及 `FanProbe.kext` 和
+`SSDT-FANEC.aml` 的暂存位置。
+
+### 手动安装
 
 1. 把 `FanProbe.kext` 放进 `EFI/OC/Kexts/`，并在 `Kernel → Add` 里加一项
    （`BundlePath FanProbe.kext`、`ExecutablePath Contents/MacOS/FanProbe`、
@@ -52,6 +78,17 @@ kext（`FanProbe`）通过 `IOACPIPlatformDevice::evaluateObject` 调用 `\_SB.A
 3. 重启。
 4. 安装命令行：`sudo cp cli/fanctl /usr/local/bin/fanctl && sudo chmod 755 /usr/local/bin/fanctl`
 5. 可选：构建 App 并把 `FanCtl.app` 复制到 `/Applications`。
+
+需要开机自动恢复和登录自启时，安装 [`docs/examples/`](docs/examples/) 里的示例任务：
+
+```bash
+sudo cp docs/examples/com.dsh.fanctl.restore.plist /Library/LaunchDaemons/
+sudo chown root:wheel /Library/LaunchDaemons/com.dsh.fanctl.restore.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.dsh.fanctl.restore.plist
+
+cp docs/examples/com.dsh.fanctl.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.dsh.fanctl.plist
+```
 
 ## 构建
 
