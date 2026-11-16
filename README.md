@@ -128,6 +128,8 @@ fanctl status             # last call result
 Left-click the menu bar icon for the compact panel (CPU/GPU temperature, both fan RPMs, and
 the full-speed switch). Right-click it for Open Control Panel, Show RPM in Menu Bar, and Quit.
 
+![Menu bar panel](docs/menubar-panel.jpg)
+
 ## Limitations
 
 - Settings apply immediately and are lost on reboot/power loss (the EC resets to auto).
