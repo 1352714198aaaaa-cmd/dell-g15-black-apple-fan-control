@@ -2,6 +2,7 @@ import Cocoa
 import SwiftUI
 import Combine
 import IOKit
+import ApplicationServices
 import UserNotifications
 
 // MARK: - 系统调用
@@ -631,7 +632,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rpmItem.target = self
         rpmItem.state = UserDefaults.standard.bool(forKey: "fanctl.menuRPM") ? .on : .off
         menu.addItem(rpmItem)
-        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: model.tr("退出 FanCtl", "Quit FanCtl"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
 
@@ -691,6 +691,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusItem.button?.image = statusImage(temp: temp, rpm1: nil, rpm2: nil)
         }
         statusItem.button?.contentTintColor = model.cpu >= 90 ? .systemRed : nil
+    }
+
+    var gModeOn = false
+
+    @objc func toggleF9(_ sender: NSMenuItem) {
+        let on = !UserDefaults.standard.bool(forKey: "fanctl.f9")
+        UserDefaults.standard.set(on, forKey: "fanctl.f9")
+        sender.state = on ? .on : .off
+        if on {
+            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(opts)
+        }
+    }
+
+    func toggleGMode() {
+        gModeOn.toggle()
+        setModeValue(gModeOn ? 171 : 160)
+        saveFanState("mode=\(gModeOn ? 171 : 160)")
+        model.lastMsg = gModeOn ? "F9 → G-Mode" : "F9 → 平衡"
     }
 
     @objc func showWindow() {
