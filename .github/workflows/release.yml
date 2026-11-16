@@ -21,6 +21,13 @@ jobs:
           ./app/build.sh
       - name: Package
         run: ./scripts/package-release.sh "${GITHUB_REF_NAME#v}"
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FanCtl-${{ github.ref_name }}
+          path: |
+            dist/FanCtl-v*.zip
+            dist/FanCtl-v*.zip.sha256
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
