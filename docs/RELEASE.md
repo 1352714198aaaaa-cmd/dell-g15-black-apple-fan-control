@@ -4,9 +4,8 @@ This is the release procedure for FanCtl. The asset naming is part of the
 contract with the Homebrew Cask: every release must upload
 `FanCtl-v<version>.zip`, and the Cask URL is built from that name.
 
-Current state: the latest published binary release is **v1.2.0**. `main`
-contains the v2.0 documentation/Cask work and the v2.1.0 menu bar popover, but
-the v2.1.0 asset has not been uploaded yet.
+Current state: **v2.1.0** is published and `Casks/g15-fanctl.rb` points at its
+asset. Use this checklist as the template for the next version.
 
 ## 1. Preconditions
 
