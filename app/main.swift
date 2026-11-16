@@ -2,7 +2,6 @@ import Cocoa
 import SwiftUI
 import Combine
 import IOKit
-import ApplicationServices
 import UserNotifications
 
 // MARK: - 系统调用
@@ -108,6 +107,7 @@ final class FanModel: ObservableObject {
     @Published var fan2: Int = 0
     @Published var duty: Int = 45
     @Published var curveOn: Bool = true
+    @Published var fullSpeed: Bool = false
     @Published var preset: String = "balanced"
     @Published var lastMsg: String = ""
     @Published var manualMode: String = "曲线 · 平衡"
@@ -131,6 +131,9 @@ final class FanModel: ObservableObject {
     private var lastNotify = Date.distantPast
     private var lastCurveDuty1: UInt32 = 0
     private var lastCurveDuty2: UInt32 = 0
+    private var preFullSpeedCurveOn = true
+    private var preFullSpeedFan1 = 50
+    private var preFullSpeedFan2 = 50
 
     var accentColor: Color { accentChoices.first(where: { $0.0 == accentName })?.1 ?? .blue }
     private var timer: Timer?
@@ -140,6 +143,12 @@ final class FanModel: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: "fanctl.customCurve"),
            let arr = try? JSONDecoder().decode([[Double]].self, from: data), arr.count >= 2 {
             customPoints = arr.map { ($0[0], $0[1]) }
+        }
+        if sysctlGet("kern.fanprobe.lastmode") == 171 {
+            fullSpeed = true
+            curveOn = false
+            fan1Duty = 100; fan2Duty = 100; duty = 100
+            manualMode = "G-Mode"
         }
         applyAppearance()
         refresh()
@@ -189,12 +198,61 @@ final class FanModel: ObservableObject {
         }
     }
     func applyMode(_ name: String, _ v: Int32) {
+        if v == 171 && !fullSpeed {
+            preFullSpeedCurveOn = curveOn
+            preFullSpeedFan1 = fan1Duty
+            preFullSpeedFan2 = fan2Duty
+        }
         setModeValue(v); saveFanState("mode=\(v)")
         curveOn = false; manualMode = name
+        fullSpeed = (v == 171)
+        if fullSpeed { fan1Duty = 100; fan2Duty = 100; duty = 100 }
         lastMsg = "已切换：\(name)（返回码 \(sysctlGet("kern.fanprobe.lastret"))）"
     }
+
+    /// Leave G-Mode before a curve/manual action. G-Mode keeps the EC at
+    /// 100%, so writing a duty without this would be ignored by the firmware.
+    private func exitFullSpeed() {
+        guard fullSpeed else { return }
+        fullSpeed = false
+        setModeValue(160)
+    }
+
+    func setFullSpeed(_ on: Bool) {
+        guard on != fullSpeed else { return }
+        if on {
+            preFullSpeedCurveOn = curveOn
+            preFullSpeedFan1 = fan1Duty
+            preFullSpeedFan2 = fan2Duty
+            fullSpeed = true
+            curveOn = false
+            setModeValue(171)
+            saveFanState("mode=171")
+            fan1Duty = 100; fan2Duty = 100; duty = 100
+            manualMode = "G-Mode"
+            lastMsg = tr("风扇全速模式", "Full speed mode")
+        } else {
+            fullSpeed = false
+            setModeValue(160)
+            saveFanState("mode=160")
+            if preFullSpeedCurveOn {
+                curveOn = true
+                lastCurveDuty1 = 0; lastCurveDuty2 = 0
+                refresh()
+            } else {
+                curveOn = false
+                fan1Duty = preFullSpeedFan1; fan2Duty = preFullSpeedFan2
+                setDutyValue(fan: 0x32, duty: UInt32(fan1Duty))
+                setDutyValue(fan: 0x33, duty: UInt32(fan2Duty))
+                saveFanState("duty1=\(fan1Duty);duty2=\(fan2Duty)")
+                manualMode = "手动 \(fan1Duty)% / \(fan2Duty)%"
+            }
+        }
+    }
+
     func applyDuty(fan: Int, _ d: Int) {
         let v = min(max(d, 0), 100)
+        exitFullSpeed()
         curveOn = false
         if fan == 1 { fan1Duty = v } else { fan2Duty = v }
         setDutyValue(fan: fan == 1 ? 0x32 : 0x33, duty: UInt32(v))
@@ -204,6 +262,7 @@ final class FanModel: ObservableObject {
     }
 
     func saveCustomCurve() {
+        exitFullSpeed()
         let arr = customPoints.map { [$0.0, $0.1] }
         if let data = try? JSONEncoder().encode(arr) {
             UserDefaults.standard.set(data, forKey: "fanctl.customCurve")
@@ -213,11 +272,13 @@ final class FanModel: ObservableObject {
         lastCurveDuty1 = 0; lastCurveDuty2 = 0; refresh()
     }
     func setCurve(_ on: Bool) {
+        exitFullSpeed()
         curveOn = on
-        if on { saveFanState("mode=160"); lastAppliedDuty = 0; refresh() }
+        if on { setModeValue(160); saveFanState("mode=160"); lastAppliedDuty = 0; refresh() }
         else { setModeValue(160); saveFanState("mode=160"); manualMode = "自动" }
     }
     func setPreset(_ key: String) {
+        exitFullSpeed()
         preset = key; curveOn = true; saveFanState("mode=160")
         switch curveTarget {
         case 1: fan1Preset = key
@@ -449,6 +510,117 @@ struct SettingsView: View {
     }
 }
 
+// MARK: - 菜单栏悬浮窗
+
+struct MenuBarPanel: View {
+    @ObservedObject var model: FanModel
+    var openPanel: () -> Void
+
+    private func temp(_ v: Double) -> String {
+        v > 0 ? String(format: "%.0f°", v) : "--"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(spacing: 7) {
+                Image(systemName: "fanblades.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(model.accentColor)
+                Text("FanCtl")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button(action: openPanel) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(model.tr("打开控制面板", "Open control panel"))
+            }
+
+            HStack(spacing: 8) {
+                PanelMetric(title: "CPU", value: temp(model.cpu), color: .blue)
+                PanelMetric(title: "GPU", value: temp(model.gpu), color: .purple)
+            }
+
+            Divider().opacity(0.35)
+
+            HStack(spacing: 8) {
+                PanelFan(title: model.tr("风扇 1", "Fan 1"), rpm: model.fan1)
+                PanelFan(title: model.tr("风扇 2", "Fan 2"), rpm: model.fan2)
+            }
+
+            Divider().opacity(0.35)
+
+            Toggle(isOn: Binding(
+                get: { model.fullSpeed },
+                set: { model.setFullSpeed($0) }
+            )) {
+                HStack(spacing: 6) {
+                    Image(systemName: "wind")
+                    Text(model.tr("风扇全速模式", "Full speed mode"))
+                }
+                .font(.system(size: 12, weight: .medium))
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+
+            Text(model.fullSpeed
+                 ? model.tr("G-Mode · 双风扇 100%", "G-Mode · both fans 100%")
+                 : model.tr("关闭后恢复之前的控制方式", "Off restores the previous control"))
+                .font(.system(size: 9.5))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 2)
+        }
+        .padding(14)
+        .frame(width: 280, height: 250, alignment: .top)
+        .tint(model.accentColor)
+    }
+}
+
+struct PanelMetric: View {
+    let title: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Circle().fill(color).frame(width: 5, height: 5)
+                Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            Text(value)
+                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.055)))
+    }
+}
+
+struct PanelFan: View {
+    let title: String
+    let rpm: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text("\(rpm)")
+                    .font(.system(size: 19, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Text("RPM").font(.system(size: 9)).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.055)))
+    }
+}
+
 // MARK: - 主界面
 
 struct ContentView: View {
@@ -617,6 +789,8 @@ struct ContentView: View {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var window: NSWindow!
+    var menu: NSMenu!
+    var popover: NSPopover!
     var model = FanModel()
     var timer: Timer?
 
@@ -624,7 +798,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.imagePosition = .imageOnly
         statusItem.button?.image = statusImage(temp: "--", rpm1: nil, rpm2: nil)
-        let menu = NSMenu()
+
+        menu = NSMenu()
         let openItem = NSMenuItem(title: model.tr("打开控制面板…", "Open Control Panel…"), action: #selector(showWindow), keyEquivalent: "o")
         openItem.target = self
         menu.addItem(openItem)
@@ -632,13 +807,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rpmItem.target = self
         rpmItem.state = UserDefaults.standard.bool(forKey: "fanctl.menuRPM") ? .on : .off
         menu.addItem(rpmItem)
-        menu.addItem(NSMenuItem(title: model.tr("退出 FanCtl", "Quit FanCtl"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        statusItem.menu = menu
+        let quitItem = NSMenuItem(title: model.tr("退出 FanCtl", "Quit FanCtl"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quitItem.target = NSApp
+        menu.addItem(quitItem)
+
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(statusItemClicked)
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+
+        makePopover()
 
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.updateTitle() }
         RunLoop.current.add(timer!, forMode: .common)
         updateTitle()
         showWindow()
+    }
+
+    @objc func statusItemClicked(_ sender: Any?) {
+        if let event = NSApp.currentEvent, event.type == .rightMouseUp {
+            statusItem.menu = menu
+            statusItem.button?.performClick(nil)
+            statusItem.menu = nil
+        } else {
+            togglePopover()
+        }
+    }
+
+    func makePopover() {
+        popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = true
+        let panel = MenuBarPanel(model: model) { [weak self] in
+            self?.popover.performClose(nil)
+            self?.showWindow()
+        }
+        popover.contentViewController = NSHostingController(rootView: panel)
+        popover.contentSize = NSSize(width: 280, height: 250)
+    }
+
+    func togglePopover() {
+        guard let popover = popover, let button = statusItem.button else { return }
+        if popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
     }
 
     @objc func toggleMenuRPM(_ sender: NSMenuItem) {
@@ -691,25 +906,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusItem.button?.image = statusImage(temp: temp, rpm1: nil, rpm2: nil)
         }
         statusItem.button?.contentTintColor = model.cpu >= 90 ? .systemRed : nil
-    }
-
-    var gModeOn = false
-
-    @objc func toggleF9(_ sender: NSMenuItem) {
-        let on = !UserDefaults.standard.bool(forKey: "fanctl.f9")
-        UserDefaults.standard.set(on, forKey: "fanctl.f9")
-        sender.state = on ? .on : .off
-        if on {
-            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(opts)
-        }
-    }
-
-    func toggleGMode() {
-        gModeOn.toggle()
-        setModeValue(gModeOn ? 171 : 160)
-        saveFanState("mode=\(gModeOn ? 171 : 160)")
-        model.lastMsg = gModeOn ? "F9 → G-Mode" : "F9 → 平衡"
     }
 
     @objc func showWindow() {

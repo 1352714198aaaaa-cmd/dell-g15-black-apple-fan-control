@@ -19,6 +19,7 @@ via the AWCC ACPI WMI interface exposed by the BIOS.
 - Fan curve presets (silent / balanced / performance)
 - `fanctl diag` diagnostics
 - Restores the last mode/duty at boot
+- Menu bar click opens a compact popover: CPU/GPU temperature, both fan RPMs, full-speed switch
 - Menu bar option to show fan RPM
 - App icon
 - SwiftUI control panel + menu bar app, login item
@@ -123,6 +124,9 @@ fanctl status             # last call result
 ```
 
 `kern.fanprobe.lastret` is `0` on success.
+
+Left-click the menu bar icon for the compact panel (CPU/GPU temperature, both fan RPMs, and
+the full-speed switch). Right-click it for Open Control Panel, Show RPM in Menu Bar, and Quit.
 
 ## Limitations
 

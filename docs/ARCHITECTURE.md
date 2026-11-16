@@ -230,8 +230,11 @@ window, but no Dock icon.
   `UNUserNotificationCenter`.
 - Appearance and language: `UserDefaults` keys `fanctl.appearance`, `fanctl.accent`,
   `fanctl.lang`; the UI is bilingual (Chinese/English).
-- Menu bar: optional stacked RPM display (`fanctl.menuRPM`); the temperature text turns red
-  at ≥ 90 °C.
+- Menu bar: left-click opens a compact `NSPopover` with CPU/GPU temperature, fan 1/2 RPM, and
+  a full-speed switch. The switch writes G-Mode (`0xAB`) and restores the previous curve or
+  manual state when turned off. Right-click opens the menu (Open Control Panel, Show RPM in
+  Menu Bar, Quit). The optional stacked RPM display is controlled by `fanctl.menuRPM`; the
+  temperature text turns red at ≥ 90 °C.
 
 The app writes the same state file as the CLI:
 
