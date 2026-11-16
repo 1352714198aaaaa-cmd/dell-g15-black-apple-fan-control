@@ -125,6 +125,9 @@ Thermal mode values:
 | G-Mode | `0xAB` (171) |
 | Custom / automatic | `0` (0) |
 
+The CLI's `auto`/`custom` aliases write `0`; the app's "Auto" button writes `0xA0`
+(balanced), which is also the firmware default used by the curve engine.
+
 The BIOS maps these commands onto EC registers. The register-level details, including which
 values are readable back through `RDEC`, are in [EC-REGISTERS.md](EC-REGISTERS.md).
 
