@@ -1,0 +1,31 @@
+name: build
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install iasl
+        run: brew install acpica
+      - name: Build kext
+        run: ./kext/build.sh
+      - name: Build SSDT
+        run: ./ssdt/build.sh
+      - name: Build app
+        run: ./app/build.sh
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp -R kext/FanProbe.kext dist/
+          cp ssdt/SSDT-FANEC.aml dist/
+          cp -R app/FanCtl.app dist/
+          cp cli/fanctl dist/
+          cd dist && zip -r ../FanCtl.zip .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FanCtl
+          path: FanCtl.zip
