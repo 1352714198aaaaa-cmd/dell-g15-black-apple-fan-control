@@ -332,7 +332,7 @@ against the host macOS SDK's `Kernel.framework` headers; the exact SDK version i
 Xcode or the Command Line Tools provide. `iasl` comes from ACPICA (`brew install acpica`);
 `IASL=/path/to/iasl` overrides the binary.
 
-CI (`.github/workflows/build.yml`) runs on `macos-13` (Intel), installs ACPICA, builds all
+CI (`.github/workflows/build.yml`) runs on `macos-15-intel`, installs ACPICA, builds all
 three artifacts, and uploads `FanCtl.zip` as a workflow artifact. A release asset is
 published as `FanCtl-v<version>.zip`; that naming is what the Homebrew Cask URL uses.
 
