@@ -33,6 +33,7 @@ via the AWCC ACPI WMI interface exposed by the BIOS.
   build and release pipeline.
 - [EC register reference](docs/EC-REGISTERS.md) — register addresses, observed values, and the
   experiments used to verify them.
+- [Release checklist](docs/RELEASE.md) — build, tag, publish, and Cask bump procedure.
 
 ## How it works
 

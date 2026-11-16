@@ -29,6 +29,7 @@
 
 - [架构说明](docs/ARCHITECTURE.md)：分层、ACPI/kext 接口、sysctl ABI、数据流、构建与发布流程。
 - [EC 寄存器表](docs/EC-REGISTERS.md)：寄存器地址、实测值，以及验证这些结论的实验。
+- [发布清单](docs/RELEASE.md)：构建、打 tag、发布 GitHub Release，以及更新 Cask 的流程。
 
 ## 原理
 

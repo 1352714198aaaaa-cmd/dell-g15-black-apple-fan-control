@@ -4,3 +4,7 @@
 build/
 **/FanCtl.app/
 **/FanProbe.kext/
+
+dist/
+FanCtl-v*.zip
+FanCtl-v*.zip.sha256

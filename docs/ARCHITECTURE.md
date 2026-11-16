@@ -335,14 +335,21 @@ against the host macOS SDK's `Kernel.framework` headers; the exact SDK version i
 Xcode or the Command Line Tools provide. `iasl` comes from ACPICA (`brew install acpica`);
 `IASL=/path/to/iasl` overrides the binary.
 
-CI (`.github/workflows/build.yml`) runs on `macos-15-intel`, installs ACPICA, builds all
-three artifacts, and uploads `FanCtl.zip` as a workflow artifact. A release asset is
-published as `FanCtl-v<version>.zip`; that naming is what the Homebrew Cask URL uses.
+CI (`.github/workflows/build.yml`) runs on `macos-15-intel` for pushes to `main` and pull
+requests, installs ACPICA, builds all three artifacts, and uploads `FanCtl.zip` as a
+workflow artifact. A tag matching `v*` triggers `.github/workflows/release.yml`, which builds
+the same artifacts, packages `FanCtl-v<version>.zip` plus a SHA-256 file, and creates a
+GitHub Release. That versioned asset name is what the Homebrew Cask URL uses.
+
+Local release packaging is `./scripts/package-release.sh 2.1.0` (after the three build
+scripts). The release procedure, including smoke tests and rollback, is in
+[RELEASE.md](RELEASE.md).
 
 The Cask (`Casks/g15-fanctl.rb`) installs `FanCtl.app` and the `fanctl` CLI from that zip. It
 does **not** install the kext or SSDT into the EFI partition — those must be placed in
 `EFI/OC/Kexts` and `EFI/OC/ACPI` and declared in OpenCore's `config.plist`. The Cask caveats
-point at the staged copies.
+point at the staged copies. After publishing a release, `./scripts/bump-cask.sh <version>`
+downloads the asset, computes its SHA-256, and updates the Cask.
 
 ## 10. Security and safety
 

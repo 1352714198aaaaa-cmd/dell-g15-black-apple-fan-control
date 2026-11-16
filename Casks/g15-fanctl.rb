@@ -1,7 +1,8 @@
 # Homebrew Cask for the current GitHub release.
 #
-# The release asset is published as FanCtl-v<version>.zip. When a new tag is
-# released, update `version` and `sha256` (shasum -a 256 FanCtl-v<version>.zip).
+# The release asset is published as FanCtl-v<version>.zip. After a release,
+# run ./scripts/bump-cask.sh <version> to update `version`, `sha256` and verify
+# the download URL.
 cask "g15-fanctl" do
   version "1.2.0"
   sha256 "30f0116ce5ad35f7db6e3fa454ec176822340c10c3e1b75ecc0881720a93f7d6"
