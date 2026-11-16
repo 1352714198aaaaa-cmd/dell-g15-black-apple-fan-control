@@ -4,8 +4,8 @@
 # run ./scripts/bump-cask.sh <version> to update `version`, `sha256` and verify
 # the download URL.
 cask "g15-fanctl" do
-  version "2.1.0"
-  sha256 "5c768195874bd7472e5300be381789c95a1d50d4a08e125f38a570a61f4a1fb5"
+  version "2.1.1"
+  sha256 "ecdc1f9b0b5c2818d3c79acacbc23f91b06645291c7ae8284e376c68cad0ac66"
 
   url "https://github.com/1352714198aaaaa-cmd/dell-g15-black-apple-fan-control/releases/download/v#{version}/FanCtl-v#{version}.zip",
       verified: "github.com/1352714198aaaaa-cmd/dell-g15-black-apple-fan-control/"
