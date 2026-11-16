@@ -621,7 +621,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "🌡 --"
+        statusItem.button?.imagePosition = .imageOnly
+        statusItem.button?.image = statusImage(temp: "--", rpm1: nil, rpm2: nil)
         let menu = NSMenu()
         let openItem = NSMenuItem(title: model.tr("打开控制面板…", "Open Control Panel…"), action: #selector(showWindow), keyEquivalent: "o")
         openItem.target = self
@@ -647,13 +648,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateTitle()
     }
 
+    func compactRPM(_ v: Int32) -> String {
+        let r = Int(v)
+        if r >= 1000 { return String(format: "%.1fk", Double(r) / 1000.0) }
+        return "\(r)"
+    }
+
+    func statusImage(temp: String, rpm1: String?, rpm2: String?) -> NSImage {
+        let fontT = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        let fontR = NSFont.monospacedDigitSystemFont(ofSize: 8, weight: .medium)
+        let attrsT: [NSAttributedString.Key: Any] = [.font: fontT, .foregroundColor: NSColor.black]
+        let attrsR: [NSAttributedString.Key: Any] = [.font: fontR, .foregroundColor: NSColor.black]
+        let tSize = (temp as NSString).size(withAttributes: attrsT)
+        let r1Size = rpm1.map { ($0 as NSString).size(withAttributes: attrsR) } ?? .zero
+        let r2Size = rpm2.map { ($0 as NSString).size(withAttributes: attrsR) } ?? .zero
+        let rWidth = max(r1Size.width, r2Size.width)
+        let width = 17 + 3 + tSize.width + (rpm1 != nil ? 5 + rWidth : 0)
+        let height: CGFloat = 18
+        let img = NSImage(size: NSSize(width: width, height: height))
+        img.lockFocus()
+        if let sym = NSImage(systemSymbolName: "fanblades", accessibilityDescription: nil) {
+            let s = sym.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)) ?? sym
+            s.draw(in: NSRect(x: 0, y: 1, width: 16, height: 16))
+        }
+        (temp as NSString).draw(at: NSPoint(x: 19, y: (height - tSize.height) / 2), withAttributes: attrsT)
+        if let r1 = rpm1, let r2 = rpm2 {
+            let x = 19 + tSize.width + 5
+            (r1 as NSString).draw(at: NSPoint(x: x, y: height / 2 + 0.5), withAttributes: attrsR)
+            (r2 as NSString).draw(at: NSPoint(x: x, y: 1), withAttributes: attrsR)
+        }
+        img.unlockFocus()
+        img.isTemplate = true
+        return img
+    }
+
     func updateTitle() {
+        let temp = String(format: "%.0f°", model.cpu)
         if UserDefaults.standard.bool(forKey: "fanctl.menuRPM") {
             let f1 = readEC(0x57), f2 = readEC(0x59)
-            statusItem.button?.title = String(format: "🌡 %.0f°C  %d/%d", model.cpu, f1, f2)
+            statusItem.button?.image = statusImage(temp: temp, rpm1: compactRPM(f1), rpm2: compactRPM(f2))
         } else {
-            statusItem.button?.title = String(format: "🌡 %.0f°C", model.cpu)
+            statusItem.button?.image = statusImage(temp: temp, rpm1: nil, rpm2: nil)
         }
+        statusItem.button?.contentTintColor = model.cpu >= 90 ? .systemRed : nil
     }
 
     @objc func showWindow() {
