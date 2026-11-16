@@ -78,7 +78,7 @@ let accentChoices: [(String, Color)] = [
     ("pink", .pink), ("purple", .purple), ("red", .red),
     ("graphite", Color(white: 0.5))
 ]
-let appearanceChoices = [("system", "自动"), ("dark", "深色"), ("light", "浅色")]
+let appearanceChoices = [("system", "自动", "Auto"), ("dark", "深色", "Dark"), ("light", "浅色", "Light")]
 let defaultCustomCurve: [(Double, Double)] = [(45, 20), (55, 30), (65, 45), (75, 65), (85, 85), (92, 100)]
 let curves: [String: [(Double, Double)]] = [
     "silent":      [(50, 20), (60, 30), (70, 45), (80, 60), (90, 85)],
@@ -118,9 +118,18 @@ final class FanModel: ObservableObject {
     @Published var fan2Duty: Int = 50
     @Published var customPoints: [(Double, Double)] = defaultCustomCurve
     @Published var showCurveEditor = false
+    @Published var showSettings = false
+    @Published var lang: String = UserDefaults.standard.string(forKey: "fanctl.lang") ?? "zh"
+    @Published var fan1Preset: String = "balanced"
+    @Published var fan2Preset: String = "balanced"
+    @Published var curveTarget: Int = 0
+
+    func tr(_ zh: String, _ en: String) -> String { lang == "en" ? en : zh }
+    func setLang(_ v: String) { lang = v; UserDefaults.standard.set(v, forKey: "fanctl.lang") }
 
     private var lastNotify = Date.distantPast
-    private var lastCurveDuty: UInt32 = 0
+    private var lastCurveDuty1: UInt32 = 0
+    private var lastCurveDuty2: UInt32 = 0
 
     var accentColor: Color { accentChoices.first(where: { $0.0 == accentName })?.1 ?? .blue }
     private var timer: Timer?
@@ -151,14 +160,16 @@ final class FanModel: ObservableObject {
             self.cpuHistory.append(t.0); if self.cpuHistory.count > 300 { self.cpuHistory.removeFirst() }
             self.gpuHistory.append(g); if self.gpuHistory.count > 300 { self.gpuHistory.removeFirst() }
             if self.curveOn {
-                let d = dutyForTemp(t.0, preset: self.preset, custom: self.customPoints)
-                if abs(Int(d) - Int(self.lastCurveDuty)) >= 3 {
-                    setDutyValue(fan: 0x32, duty: d)
-                    setDutyValue(fan: 0x33, duty: d)
-                    self.lastCurveDuty = d
+                let d1 = dutyForTemp(t.0, preset: self.fan1Preset, custom: self.customPoints)
+                let d2 = dutyForTemp(t.0, preset: self.fan2Preset, custom: self.customPoints)
+                if abs(Int(d1) - Int(self.lastCurveDuty1)) >= 3 {
+                    setDutyValue(fan: 0x32, duty: d1); self.lastCurveDuty1 = d1
                 }
-                self.duty = Int(d)
-                self.fan1Duty = Int(d); self.fan2Duty = Int(d)
+                if abs(Int(d2) - Int(self.lastCurveDuty2)) >= 3 {
+                    setDutyValue(fan: 0x33, duty: d2); self.lastCurveDuty2 = d2
+                }
+                self.fan1Duty = Int(d1); self.fan2Duty = Int(d2)
+                self.duty = Int(max(d1, d2))
                 self.manualMode = "曲线 · " + self.presetName(self.preset)
             }
             if t.0 >= 92 && Date().timeIntervalSince(self.lastNotify) > 300 {
@@ -169,7 +180,12 @@ final class FanModel: ObservableObject {
     }
 
     func presetName(_ key: String) -> String {
-        switch key { case "silent": return "安静"; case "performance": return "性能"; case "custom": return "自定义"; default: return "平衡" }
+        switch key {
+        case "silent": return tr("安静", "Silent")
+        case "performance": return tr("性能", "Performance")
+        case "custom": return tr("自定义", "Custom")
+        default: return tr("平衡", "Balanced")
+        }
     }
     func applyMode(_ name: String, _ v: Int32) {
         setModeValue(v); saveFanState("mode=\(v)")
@@ -192,7 +208,8 @@ final class FanModel: ObservableObject {
             UserDefaults.standard.set(data, forKey: "fanctl.customCurve")
         }
         preset = "custom"; curveOn = true; saveFanState("mode=160")
-        lastCurveDuty = 0; refresh()
+        if curveTarget == 1 { fan1Preset = "custom" } else if curveTarget == 2 { fan2Preset = "custom" } else { fan1Preset = "custom"; fan2Preset = "custom" }
+        lastCurveDuty1 = 0; lastCurveDuty2 = 0; refresh()
     }
     func setCurve(_ on: Bool) {
         curveOn = on
@@ -201,7 +218,14 @@ final class FanModel: ObservableObject {
     }
     func setPreset(_ key: String) {
         preset = key; curveOn = true; saveFanState("mode=160")
-        lastAppliedDuty = 0; lastMsg = "曲线预设：\(presetName(key))"; refresh()
+        switch curveTarget {
+        case 1: fan1Preset = key
+        case 2: fan2Preset = key
+        default: fan1Preset = key; fan2Preset = key
+        }
+        lastCurveDuty1 = 0; lastCurveDuty2 = 0
+        lastMsg = tr("曲线预设：", "Curve preset: ") + presetName(key)
+        refresh()
     }
     func setAppearance(_ v: String) {
         appearance = v; UserDefaults.standard.set(v, forKey: "fanctl.appearance"); applyAppearance()
@@ -310,6 +334,7 @@ struct TempChart: View {
 }
 
 struct CurveEditor: View {
+    @ObservedObject var model: FanModel
     @Binding var points: [(Double, Double)]
     var onSave: () -> Void
     @Environment(\.dismiss) private var dismiss
@@ -318,9 +343,9 @@ struct CurveEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("自定义风扇曲线").font(.system(size: 15, weight: .semibold))
+                Text(model.tr("自定义风扇曲线", "Custom Fan Curve")).font(.system(size: 15, weight: .semibold))
                 Spacer()
-                Button("恢复默认") { points = defaultCustomCurve }
+                Button(model.tr("恢复默认", "Reset")) { points = defaultCustomCurve }
                     .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
             }
             GeometryReader { geo in
@@ -374,11 +399,11 @@ struct CurveEditor: View {
                 }.onEnded { _ in dragIdx = nil })
             }
             .frame(height: 230)
-            Text("拖动圆点调整：横轴温度，纵轴占空比").font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(model.tr("拖动圆点调整：横轴温度，纵轴占空比", "Drag the dots: X = temperature, Y = duty")).font(.system(size: 10)).foregroundStyle(.secondary)
             HStack {
                 Spacer()
-                Button("取消") { dismiss() }
-                Button("保存并启用") { onSave(); dismiss() }
+                Button(model.tr("取消", "Cancel")) { dismiss() }
+                Button(model.tr("保存并启用", "Save & Enable")) { onSave(); dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
         }
@@ -387,12 +412,48 @@ struct CurveEditor: View {
     }
 }
 
+struct SettingsView: View {
+    @ObservedObject var model: FanModel
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(model.tr("设置", "Settings")).font(.system(size: 15, weight: .semibold))
+                Spacer()
+                Button(model.tr("完成", "Done")) { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+            Text(model.tr("外观", "Appearance")).font(.system(size: 11)).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                ForEach(appearanceChoices, id: \.0) { a in
+                    PillButton(title: model.tr(a.1, a.2), active: model.appearance == a.0) { model.setAppearance(a.0) }
+                }
+            }
+            Text(model.tr("强调色", "Accent color")).font(.system(size: 11)).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                ForEach(accentChoices, id: \.0) { c in
+                    Circle().fill(c.1).frame(width: 20, height: 20)
+                        .overlay(Circle().stroke(Color.primary.opacity(model.accentName == c.0 ? 0.9 : 0), lineWidth: 2))
+                        .onTapGesture { model.setAccent(c.0) }
+                }
+            }
+            Text(model.tr("语言", "Language")).font(.system(size: 11)).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                PillButton(title: "中文", active: model.lang == "zh") { model.setLang("zh") }
+                PillButton(title: "English", active: model.lang == "en") { model.setLang("en") }
+            }
+            Spacer()
+        }
+        .padding(20)
+        .frame(width: 380, height: 300)
+    }
+}
+
 // MARK: - 主界面
 
 struct ContentView: View {
     @ObservedObject var model: FanModel
     let modes = [("自动", Int32(160)), ("性能", Int32(161)), ("冷静", Int32(162)), ("安静", Int32(163)), ("G-Mode", Int32(171))]
-    let presets = [("silent", "安静"), ("balanced", "平衡"), ("performance", "性能")]
+    let presets = ["silent", "balanced", "performance"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -407,7 +468,7 @@ struct ContentView: View {
                     Text("FanCtl").font(.system(size: 15, weight: .semibold))
                     HStack(spacing: 4) {
                         Circle().fill(.green).frame(width: 5, height: 5)
-                        Text("风扇正常 · Dell G15 · macOS 26").font(.system(size: 10.5)).foregroundStyle(.secondary)
+                        Text(model.tr("风扇正常 · Dell G15 · macOS 26", "Fans normal · Dell G15 · macOS 26")).font(.system(size: 10.5)).foregroundStyle(.secondary)
                     }
                 }
                 Spacer()
@@ -415,12 +476,15 @@ struct ContentView: View {
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Capsule().fill(Color.accentColor.opacity(0.18)))
                     .foregroundStyle(Color.accentColor)
+                Button(action: { model.showSettings = true }) {
+                    Image(systemName: "gearshape").font(.system(size: 13))
+                }.buttonStyle(.plain).foregroundStyle(.secondary)
             }
 
             // fans
             HStack(alignment: .top, spacing: 22) {
-                FanColumn(title: "风扇 1", rpm: model.fan1, maxRPM: 5200)
-                FanColumn(title: "风扇 2", rpm: model.fan2, maxRPM: 5200)
+                FanColumn(title: model.tr("风扇 1", "Fan 1"), rpm: model.fan1, maxRPM: 5200)
+                FanColumn(title: model.tr("风扇 2", "Fan 2"), rpm: model.fan2, maxRPM: 5200)
             }
 
             // mode bar
@@ -433,18 +497,18 @@ struct ContentView: View {
             // manual duty (per fan)
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
-                    Text("手动占空比").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(model.tr("手动占空比", "Manual duty")).font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer()
                     Text("\(model.fan1Duty)% / \(model.fan2Duty)%").font(.system(size: 11, weight: .medium))
                 }
                 HStack(spacing: 8) {
-                    Text("风扇1").font(.system(size: 10)).foregroundStyle(.tertiary).frame(width: 32, alignment: .leading)
+                    Text(model.tr("风扇1", "Fan 1")).font(.system(size: 10)).foregroundStyle(.tertiary).frame(width: 32, alignment: .leading)
                     Slider(value: Binding(get: { Double(model.fan1Duty) },
                                           set: { model.applyDuty(fan: 1, Int($0)) }), in: 0...100, step: 5)
                         .controlSize(.mini)
                 }
                 HStack(spacing: 8) {
-                    Text("风扇2").font(.system(size: 10)).foregroundStyle(.tertiary).frame(width: 32, alignment: .leading)
+                    Text(model.tr("风扇2", "Fan 2")).font(.system(size: 10)).foregroundStyle(.tertiary).frame(width: 32, alignment: .leading)
                     Slider(value: Binding(get: { Double(model.fan2Duty) },
                                           set: { model.applyDuty(fan: 2, Int($0)) }), in: 0...100, step: 5)
                         .controlSize(.mini)
@@ -462,9 +526,9 @@ struct ContentView: View {
             // chart
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("温度").font(.system(size: 12, weight: .semibold))
+                    Text(model.tr("温度", "Temperature")).font(.system(size: 12, weight: .semibold))
                     Spacer()
-                    Text("最近 10 分钟").font(.system(size: 10)).foregroundStyle(.tertiary)
+                    Text(model.tr("最近 10 分钟", "Last 10 min")).font(.system(size: 10)).foregroundStyle(.tertiary)
                 }
                 TempChart(cpu: model.cpuHistory, gpu: model.gpuHistory)
                 HStack(spacing: 12) {
@@ -473,45 +537,49 @@ struct ContentView: View {
                 }
             }
 
-            // curve presets
-            HStack(spacing: 8) {
-                ForEach(presets, id: \.0) { p in
-                    PillButton(title: p.1, active: model.curveOn && model.preset == p.0) { model.setPreset(p.0) }
-                }
-                PillButton(title: "自定义…", active: model.curveOn && model.preset == "custom") { model.showCurveEditor = true }
-            }
-
-            // appearance (compact)
-            HStack(spacing: 8) {
-                ForEach(appearanceChoices, id: \.0) { a in
-                    PillButton(title: a.1, active: model.appearance == a.0) { model.setAppearance(a.0) }
+            // compact curve target
+            HStack(spacing: 6) {
+                Text(model.tr("应用到", "Apply to")).font(.system(size: 10)).foregroundStyle(.tertiary)
+                ForEach([(0, "两个", "Both"), (1, "风扇1", "Fan 1"), (2, "风扇2", "Fan 2")], id: \.0) { t in
+                    Button(action: { model.curveTarget = t.0 }) {
+                        Text(model.tr(t.1, t.2)).font(.system(size: 10, weight: .medium))
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(Capsule().fill(model.curveTarget == t.0 ? Color.accentColor.opacity(0.9) : Color.white.opacity(0.06)))
+                            .foregroundStyle(model.curveTarget == t.0 ? .white : .secondary)
+                    }.buttonStyle(.plain)
                 }
                 Spacer()
-                ForEach(accentChoices.prefix(5), id: \.0) { c in
-                    Circle().fill(c.1).frame(width: 14, height: 14)
-                        .overlay(Circle().stroke(Color.primary.opacity(model.accentName == c.0 ? 0.9 : 0), lineWidth: 1.5))
-                        .onTapGesture { model.setAccent(c.0) }
+            }
+
+            // curve presets
+            HStack(spacing: 8) {
+                ForEach(presets, id: \.self) { p in
+                    PillButton(title: model.presetName(p), active: model.curveOn && model.preset == p) { model.setPreset(p) }
                 }
+                PillButton(title: model.tr("自定义…", "Custom…"), active: model.curveOn && model.preset == "custom") { model.showCurveEditor = true }
             }
 
             Spacer(minLength: 0)
 
             // footer
             HStack {
-                Button("活动监视器") {
+                Button(model.tr("活动监视器", "Activity Monitor")) {
                     NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"))
                 }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
-                Button("退出") { NSApp.terminate(nil) }
+                Button(model.tr("退出", "Quit")) { NSApp.terminate(nil) }
                     .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
+        .sheet(isPresented: $model.showSettings) {
+            SettingsView(model: model)
+        }
         .sheet(isPresented: $model.showCurveEditor) {
-            CurveEditor(points: $model.customPoints, onSave: { model.saveCustomCurve() })
+            CurveEditor(model: model, points: $model.customPoints, onSave: { model.saveCustomCurve() })
         }
         .padding(18)
         .padding(.top, 10)
-        .frame(width: 460, height: 760)
+        .frame(width: 460, height: 740)
         .tint(model.accentColor)
     }
 
@@ -555,15 +623,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "🌡 --"
         let menu = NSMenu()
-        let openItem = NSMenuItem(title: "打开控制面板…", action: #selector(showWindow), keyEquivalent: "o")
+        let openItem = NSMenuItem(title: model.tr("打开控制面板…", "Open Control Panel…"), action: #selector(showWindow), keyEquivalent: "o")
         openItem.target = self
         menu.addItem(openItem)
-        let rpmItem = NSMenuItem(title: "菜单栏显示转速", action: #selector(toggleMenuRPM), keyEquivalent: "")
+        let rpmItem = NSMenuItem(title: model.tr("菜单栏显示转速", "Show RPM in Menu Bar"), action: #selector(toggleMenuRPM), keyEquivalent: "")
         rpmItem.target = self
         rpmItem.state = UserDefaults.standard.bool(forKey: "fanctl.menuRPM") ? .on : .off
         menu.addItem(rpmItem)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "退出 FanCtl", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: model.tr("退出 FanCtl", "Quit FanCtl"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
 
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.updateTitle() }
@@ -590,7 +658,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showWindow() {
         if window == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 760),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 740),
                              styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                              backing: .buffered, defer: false)
             w.title = "FanCtl 风扇控制"
