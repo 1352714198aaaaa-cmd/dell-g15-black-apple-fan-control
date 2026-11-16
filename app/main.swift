@@ -79,6 +79,13 @@ func dutyForTemp(_ t: Double, preset: String) -> UInt32 {
     return 50
 }
 
+let accentChoices: [(String, Color)] = [
+    ("blue", .blue), ("green", .green), ("orange", .orange),
+    ("pink", .pink), ("purple", .purple), ("red", .red),
+    ("graphite", Color(white: 0.5))
+]
+let appearanceChoices = [("system", "跟随系统"), ("dark", "深色"), ("light", "浅色")]
+
 final class FanModel: ObservableObject {
     @Published var cpu: Double = 0
     @Published var gpu: Double = 0
@@ -90,11 +97,38 @@ final class FanModel: ObservableObject {
     @Published var preset: String = "balanced"
     @Published var lastMsg: String = ""
     @Published var manualMode: String = ""
+    @Published var appearance: String = UserDefaults.standard.string(forKey: "fanctl.appearance") ?? "system"
+    @Published var accentName: String = UserDefaults.standard.string(forKey: "fanctl.accent") ?? "blue"
+
+    var accentColor: Color { accentChoices.first(where: { $0.0 == accentName })?.1 ?? .blue }
 
     private var timer: Timer?
     private var lastAppliedDuty: UInt32 = 0
 
-    init() { refresh(); timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() } }
+    init() {
+        applyAppearance()
+        refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
+    }
+
+    func setAppearance(_ v: String) {
+        appearance = v
+        UserDefaults.standard.set(v, forKey: "fanctl.appearance")
+        applyAppearance()
+    }
+
+    func applyAppearance() {
+        switch appearance {
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        default: NSApp.appearance = nil
+        }
+    }
+
+    func setAccent(_ v: String) {
+        accentName = v
+        UserDefaults.standard.set(v, forKey: "fanctl.accent")
+    }
 
     func refresh() {
         let t = fanbarTemps()
@@ -176,6 +210,7 @@ struct StatCard: View {
 struct ModeButton: View {
     let title: String
     let active: Bool
+    let accent: Color
     let action: () -> Void
     var body: some View {
         Button(action: action) {
@@ -183,7 +218,7 @@ struct ModeButton: View {
                 .font(.system(size: 12, weight: .medium))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 8).fill(active ? Color.accentColor : Color(nsColor: .controlBackgroundColor)))
+                .background(RoundedRectangle(cornerRadius: 8).fill(active ? accent : Color(nsColor: .controlBackgroundColor)))
                 .foregroundStyle(active ? .white : .primary)
         }
         .buttonStyle(.plain)
@@ -224,7 +259,7 @@ struct ContentView: View {
                 Text("模式").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
                 HStack(spacing: 8) {
                     ForEach(modes, id: \.0) { m in
-                        ModeButton(title: m.0, active: false) { model.applyMode(m.0, m.1) }
+                        ModeButton(title: m.0, active: false, accent: model.accentColor) { model.applyMode(m.0, m.1) }
                     }
                 }
             }
@@ -247,11 +282,27 @@ struct ContentView: View {
                 }
                 HStack(spacing: 8) {
                     ForEach(presets, id: \.0) { p in
-                        ModeButton(title: p.1, active: model.curveOn && model.preset == p.0) { model.setPreset(p.0) }
+                        ModeButton(title: p.1, active: model.curveOn && model.preset == p.0, accent: model.accentColor) { model.setPreset(p.0) }
                     }
                 }
                 Text("曲线：45°C→20% · 55→30 · 65→45 · 75→65 · 85→85 · 92→100（平衡）")
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("外观").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    ForEach(appearanceChoices, id: \.0) { a in
+                        ModeButton(title: a.1, active: model.appearance == a.0, accent: model.accentColor) { model.setAppearance(a.0) }
+                    }
+                }
+                HStack(spacing: 10) {
+                    ForEach(accentChoices, id: \.0) { c in
+                        Circle().fill(c.1).frame(width: 18, height: 18)
+                            .overlay(Circle().stroke(Color.primary.opacity(model.accentName == c.0 ? 0.9 : 0), lineWidth: 2))
+                            .onTapGesture { model.setAccent(c.0) }
+                    }
+                }
             }
 
             if !model.lastMsg.isEmpty {
@@ -260,7 +311,8 @@ struct ContentView: View {
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(width: 480, height: 520)
+        .tint(model.accentColor)
+        .frame(width: 480, height: 620)
     }
 }
 
@@ -296,7 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showWindow() {
         if window == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 520),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 620),
                              styleMask: [.titled, .closable, .miniaturizable],
                              backing: .buffered, defer: false)
             w.title = "FanCtl 风扇控制"

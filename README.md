@@ -18,6 +18,7 @@ via the AWCC ACPI WMI interface exposed by the BIOS.
 - GPU temperature (`IOAccelerator` → `PerformanceStatistics`)
 - Fan curve presets (silent / balanced / performance)
 - SwiftUI control panel + menu bar app, login item
+- Appearance themes: follow system / dark / light + accent colors
 - CLI: `fanctl mode|duty|rpm|status`
 
 ## How it works

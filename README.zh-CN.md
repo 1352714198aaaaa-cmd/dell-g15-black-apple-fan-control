@@ -16,6 +16,7 @@
 - GPU 温度（`IOAccelerator` → `PerformanceStatistics`）
 - 风扇曲线预设（安静 / 平衡 / 性能）
 - SwiftUI 控制面板 + 菜单栏 App，登录自启
+- 外观主题：跟随系统 / 深色 / 浅色 + 强调色
 - 命令行：`fanctl mode|duty|rpm|status`
 
 ## 原理
