@@ -322,15 +322,6 @@ struct ContentView: View {
                     .controlSize(.small)
             }
 
-            // target line
-            HStack {
-                Text(model.curveOn ? "曲线：跟随 CPU 温度" : "手动占空比")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                Spacer()
-                Text(model.curveOn ? "目标 \(model.duty)%" : "\(model.duty)%")
-                    .font(.system(size: 11, weight: .medium))
-            }
-
             Divider().opacity(0.15)
 
             // temps
