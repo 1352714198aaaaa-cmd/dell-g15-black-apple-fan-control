@@ -20,6 +20,7 @@
 - 菜单栏可选显示转速
 - App 图标
 - SwiftUI 控制面板 + 菜单栏 App，登录自启
+- 双风扇大数字 RPM、CPU/GPU 实时温度曲线、手动占空比滑块
 - 外观主题：跟随系统 / 深色 / 浅色 + 强调色
 - 命令行：`fanctl mode|duty|rpm|status`
 

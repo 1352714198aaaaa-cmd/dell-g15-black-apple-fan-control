@@ -22,6 +22,7 @@ via the AWCC ACPI WMI interface exposed by the BIOS.
 - Menu bar option to show fan RPM
 - App icon
 - SwiftUI control panel + menu bar app, login item
+- Dual fan RPM gauges, live CPU/GPU temperature chart, manual duty slider
 - Appearance themes: follow system / dark / light + accent colors
 - CLI: `fanctl mode|duty|rpm|status`
 
