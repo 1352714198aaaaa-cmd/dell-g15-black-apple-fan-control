@@ -1,5 +1,7 @@
 # G15 FanCtl — 戴尔 G15 macOS 风扇控制
 
+**最新版本：[v2.1.0](https://github.com/1352714198aaaaa-cmd/dell-g15-black-apple-fan-control/releases/tag/v2.1.0)** · **英文说明：[README.md](README.md)**
+
 在 **Dell G15（5511 / i7-11800H + RTX 3060 Laptop）** 上运行 macOS 26（Tahoe），
 通过 BIOS 暴露的 AWCC ACPI WMI 接口控制风扇。
 
