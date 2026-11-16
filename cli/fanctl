@@ -116,6 +116,14 @@ case "${1:-}" in
               else
                   apply_duty "$id" "$val" >/dev/null && echo "restored duty=$id:$val"
               fi ;;
+      duty1=*|duty2=*)
+              for pair in ${s//;/ }; do
+                  k=${pair%%=*}; v=${pair#*=}
+                  case "$k" in
+                      duty1) apply_duty 0x32 "$v" >/dev/null; echo "restored fan1=$v" ;;
+                      duty2) apply_duty 0x33 "$v" >/dev/null; echo "restored fan2=$v" ;;
+                  esac
+              done ;;
       *) echo "no state to restore" ;;
     esac
     ;;

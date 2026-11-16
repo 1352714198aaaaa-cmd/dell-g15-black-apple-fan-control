@@ -2,6 +2,7 @@ import Cocoa
 import SwiftUI
 import Combine
 import IOKit
+import UserNotifications
 
 // MARK: - 系统调用
 
@@ -58,6 +59,18 @@ func gpuTemperature() -> Double {
     return result
 }
 
+func notifyHighTemp(_ temp: Double) {
+    let center = UNUserNotificationCenter.current()
+    center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+        guard granted else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "FanCtl · 温度过高"
+        content.body = String(format: "CPU 当前 %.0f°C，风扇已自动提速", temp)
+        content.sound = .default
+        center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+}
+
 // MARK: - 主题
 
 let accentChoices: [(String, Color)] = [
@@ -66,13 +79,16 @@ let accentChoices: [(String, Color)] = [
     ("graphite", Color(white: 0.5))
 ]
 let appearanceChoices = [("system", "自动"), ("dark", "深色"), ("light", "浅色")]
+let defaultCustomCurve: [(Double, Double)] = [(45, 20), (55, 30), (65, 45), (75, 65), (85, 85), (92, 100)]
 let curves: [String: [(Double, Double)]] = [
     "silent":      [(50, 20), (60, 30), (70, 45), (80, 60), (90, 85)],
     "balanced":    [(45, 20), (55, 30), (65, 45), (75, 65), (85, 85), (92, 100)],
     "performance": [(45, 55), (55, 70), (65, 85), (75, 95), (85, 100)]
 ]
-func dutyForTemp(_ t: Double, preset: String) -> UInt32 {
-    let c = curves[preset] ?? curves["balanced"]!
+func dutyForTemp(_ t: Double, preset: String, custom: [(Double, Double)]? = nil) -> UInt32 {
+    let c: [(Double, Double)]
+    if preset == "custom" { c = custom ?? defaultCustomCurve }
+    else { c = curves[preset] ?? curves["balanced"]! }
     if t <= c[0].0 { return UInt32(c[0].1) }
     if t >= c[c.count-1].0 { return UInt32(c[c.count-1].1) }
     for i in 0..<(c.count - 1) {
@@ -98,12 +114,23 @@ final class FanModel: ObservableObject {
     @Published var accentName: String = UserDefaults.standard.string(forKey: "fanctl.accent") ?? "blue"
     @Published var cpuHistory: [Double] = []
     @Published var gpuHistory: [Double] = []
+    @Published var fan1Duty: Int = 50
+    @Published var fan2Duty: Int = 50
+    @Published var customPoints: [(Double, Double)] = defaultCustomCurve
+    @Published var showCurveEditor = false
+
+    private var lastNotify = Date.distantPast
+    private var lastCurveDuty: UInt32 = 0
 
     var accentColor: Color { accentChoices.first(where: { $0.0 == accentName })?.1 ?? .blue }
     private var timer: Timer?
     private var lastAppliedDuty: UInt32 = 0
 
     init() {
+        if let data = UserDefaults.standard.data(forKey: "fanctl.customCurve"),
+           let arr = try? JSONDecoder().decode([[Double]].self, from: data), arr.count >= 2 {
+            customPoints = arr.map { ($0[0], $0[1]) }
+        }
         applyAppearance()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
@@ -124,33 +151,48 @@ final class FanModel: ObservableObject {
             self.cpuHistory.append(t.0); if self.cpuHistory.count > 300 { self.cpuHistory.removeFirst() }
             self.gpuHistory.append(g); if self.gpuHistory.count > 300 { self.gpuHistory.removeFirst() }
             if self.curveOn {
-                let d = dutyForTemp(t.0, preset: self.preset)
-                if d != self.lastAppliedDuty {
+                let d = dutyForTemp(t.0, preset: self.preset, custom: self.customPoints)
+                if abs(Int(d) - Int(self.lastCurveDuty)) >= 3 {
                     setDutyValue(fan: 0x32, duty: d)
                     setDutyValue(fan: 0x33, duty: d)
-                    self.lastAppliedDuty = d
+                    self.lastCurveDuty = d
                 }
                 self.duty = Int(d)
+                self.fan1Duty = Int(d); self.fan2Duty = Int(d)
                 self.manualMode = "曲线 · " + self.presetName(self.preset)
+            }
+            if t.0 >= 92 && Date().timeIntervalSince(self.lastNotify) > 300 {
+                self.lastNotify = Date()
+                notifyHighTemp(t.0)
             }
         }
     }
 
     func presetName(_ key: String) -> String {
-        switch key { case "silent": return "安静"; case "performance": return "性能"; default: return "平衡" }
+        switch key { case "silent": return "安静"; case "performance": return "性能"; case "custom": return "自定义"; default: return "平衡" }
     }
     func applyMode(_ name: String, _ v: Int32) {
         setModeValue(v); saveFanState("mode=\(v)")
         curveOn = false; manualMode = name
         lastMsg = "已切换：\(name)（返回码 \(sysctlGet("kern.fanprobe.lastret"))）"
     }
-    func applyDuty(_ d: Int) {
+    func applyDuty(fan: Int, _ d: Int) {
         let v = min(max(d, 0), 100)
-        duty = v; curveOn = false; manualMode = "手动 \(v)%"
-        setDutyValue(fan: 0x32, duty: UInt32(v))
-        setDutyValue(fan: 0x33, duty: UInt32(v))
-        saveFanState("duty=both:\(v)")
-        lastMsg = "手动占空比 \(v)%"
+        curveOn = false
+        if fan == 1 { fan1Duty = v } else { fan2Duty = v }
+        setDutyValue(fan: fan == 1 ? 0x32 : 0x33, duty: UInt32(v))
+        saveFanState("duty1=\(fan1Duty);duty2=\(fan2Duty)")
+        manualMode = "手动 \(fan1Duty)% / \(fan2Duty)%"
+        lastMsg = "手动：风扇1 \(fan1Duty)% · 风扇2 \(fan2Duty)%"
+    }
+
+    func saveCustomCurve() {
+        let arr = customPoints.map { [$0.0, $0.1] }
+        if let data = try? JSONEncoder().encode(arr) {
+            UserDefaults.standard.set(data, forKey: "fanctl.customCurve")
+        }
+        preset = "custom"; curveOn = true; saveFanState("mode=160")
+        lastCurveDuty = 0; refresh()
     }
     func setCurve(_ on: Bool) {
         curveOn = on
@@ -267,6 +309,84 @@ struct TempChart: View {
     }
 }
 
+struct CurveEditor: View {
+    @Binding var points: [(Double, Double)]
+    var onSave: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var dragIdx: Int? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("自定义风扇曲线").font(.system(size: 15, weight: .semibold))
+                Spacer()
+                Button("恢复默认") { points = defaultCustomCurve }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            GeometryReader { geo in
+                let w = geo.size.width, h = geo.size.height
+                ZStack {
+                    ForEach([20.0, 40.0, 60.0, 80.0], id: \.self) { t in
+                        let y = h - CGFloat(t / 100) * h
+                        Path { p in p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: w, y: y)) }
+                            .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+                        Text("\(Int(t))%").font(.system(size: 8)).foregroundStyle(.tertiary)
+                            .position(x: w - 16, y: y - 6)
+                    }
+                    Path { p in
+                        let sorted = points.sorted { $0.0 < $1.0 }
+                        for (i, pt) in sorted.enumerated() {
+                            let x = CGFloat(pt.0 / 100) * w
+                            let y = h - CGFloat(pt.1 / 100) * h
+                            if i == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
+                        }
+                    }.stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineJoin: .round))
+                    ForEach(points.indices, id: \.self) { i in
+                        Circle().fill(Color.accentColor)
+                            .frame(width: 11, height: 11)
+                            .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1))
+                            .position(x: CGFloat(points[i].0 / 100) * w, y: h - CGFloat(points[i].1 / 100) * h)
+                    }
+                }
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0).onChanged { v in
+                    let x = Double(v.location.x / w) * 100
+                    let y = (1 - Double(v.location.y / h)) * 100
+                    if dragIdx == nil {
+                        var best = 0; var bestD = Double.infinity
+                        for i in points.indices {
+                            let dx = points[i].0 - x, dy = points[i].1 - y
+                            let d = dx * dx + dy * dy
+                            if d < bestD { bestD = d; best = i }
+                        }
+                        dragIdx = best
+                    }
+                    if let i = dragIdx {
+                        var t = min(max(x, 25), 100)
+                        var d = min(max(y, 0), 100)
+                        let sorted = points.sorted { $0.0 < $1.0 }
+                        if let idx = sorted.firstIndex(where: { abs($0.0 - points[i].0) < 0.001 }) {
+                            if idx > 0 { t = max(t, sorted[idx-1].0 + 2) }
+                            if idx < sorted.count - 1 { t = min(t, sorted[idx+1].0 - 2) }
+                        }
+                        points[i] = (t, d)
+                    }
+                }.onEnded { _ in dragIdx = nil })
+            }
+            .frame(height: 230)
+            Text("拖动圆点调整：横轴温度，纵轴占空比").font(.system(size: 10)).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("取消") { dismiss() }
+                Button("保存并启用") { onSave(); dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 460, height: 380)
+    }
+}
+
 // MARK: - 主界面
 
 struct ContentView: View {
@@ -310,16 +430,25 @@ struct ContentView: View {
                 }
             }
 
-            // manual duty
-            VStack(alignment: .leading, spacing: 4) {
+            // manual duty (per fan)
+            VStack(alignment: .leading, spacing: 5) {
                 HStack {
                     Text("手动占空比").font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer()
-                    Text("\(model.duty)%").font(.system(size: 11, weight: .medium))
+                    Text("\(model.fan1Duty)% / \(model.fan2Duty)%").font(.system(size: 11, weight: .medium))
                 }
-                Slider(value: Binding(get: { Double(model.duty) },
-                                      set: { model.applyDuty(Int($0)) }), in: 0...100, step: 5)
-                    .controlSize(.small)
+                HStack(spacing: 8) {
+                    Text("风扇1").font(.system(size: 10)).foregroundStyle(.tertiary).frame(width: 32, alignment: .leading)
+                    Slider(value: Binding(get: { Double(model.fan1Duty) },
+                                          set: { model.applyDuty(fan: 1, Int($0)) }), in: 0...100, step: 5)
+                        .controlSize(.mini)
+                }
+                HStack(spacing: 8) {
+                    Text("风扇2").font(.system(size: 10)).foregroundStyle(.tertiary).frame(width: 32, alignment: .leading)
+                    Slider(value: Binding(get: { Double(model.fan2Duty) },
+                                          set: { model.applyDuty(fan: 2, Int($0)) }), in: 0...100, step: 5)
+                        .controlSize(.mini)
+                }
             }
 
             Divider().opacity(0.15)
@@ -349,6 +478,7 @@ struct ContentView: View {
                 ForEach(presets, id: \.0) { p in
                     PillButton(title: p.1, active: model.curveOn && model.preset == p.0) { model.setPreset(p.0) }
                 }
+                PillButton(title: "自定义…", active: model.curveOn && model.preset == "custom") { model.showCurveEditor = true }
             }
 
             // appearance (compact)
@@ -375,6 +505,9 @@ struct ContentView: View {
                 Button("退出") { NSApp.terminate(nil) }
                     .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
             }
+        }
+        .sheet(isPresented: $model.showCurveEditor) {
+            CurveEditor(points: $model.customPoints, onSave: { model.saveCustomCurve() })
         }
         .padding(18)
         .padding(.top, 10)
